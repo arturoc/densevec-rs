@@ -526,10 +526,6 @@ impl<'a, T: 'a + Copy> Extend<(usize, &'a T)> for DenseVec<T>{
 mod test_map {
     use super::DenseVec;
     use super::Entry::{Occupied, Vacant};
-    use std::cell::RefCell;
-    use std::panic;
-    use std::mem::size_of;
-    use std::usize;
 
     #[test]
     fn test_zero_capacities() {
