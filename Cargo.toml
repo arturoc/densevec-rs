@@ -1,0 +1,6 @@
+[package]
+name = "dense-vec"
+version = "0.1.0"
+authors = ["arturo castro <arturo@openframeworks.cc>"]
+
+[dependencies]
