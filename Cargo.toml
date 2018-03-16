@@ -1,6 +1,12 @@
 [package]
-name = "dense-vec"
-version = "0.1.0"
+name = "densevec"
 authors = ["arturo castro <arturo@openframeworks.cc>"]
+description = "Map like collection with usize indices that stores values contiguosly"
+homepage = "https://github.com/arturoc/densevec-rs"
+repository = "https://github.com/arturoc/densevec-rs"
+documentation = "http://rin.rs/docs/densevec/"
+readme = "README.md"
+license = "MIT"
+version = "0.1.0"
 
 [dependencies]
