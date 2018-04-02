@@ -1279,7 +1279,7 @@ mod test_map {
 
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "unstable"))]
 mod benches{
     extern crate test;
     use self::test::Bencher;
