@@ -1279,6 +1279,7 @@ mod test_map {
 
 }
 
+#[cfg(feature = "unstable")]
 #[cfg(test)]
 mod benches{
     extern crate test;
