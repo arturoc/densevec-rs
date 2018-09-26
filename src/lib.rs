@@ -1,5 +1,10 @@
 #![cfg_attr(feature = "unstable", feature(test))]
 
+#[cfg(feature="parallel")]
+extern crate rayon;
+
+#[cfg(feature="parallel")]
+use rayon::prelude::*;
 
 use std::mem;
 use std::ptr;
@@ -185,6 +190,17 @@ impl<T> DenseVec<T>{
                 None
             }
         )
+    }
+}
+
+#[cfg(feature="parallel")]
+impl<T: Send + Sync> DenseVec<T>{
+    pub fn par_values(&self) -> rayon::slice::Iter<T> {
+        self.storage.par_iter()
+    }
+
+    pub fn par_values_mut(&mut self) -> rayon::slice::IterMut<T> {
+        self.storage.par_iter_mut()
     }
 }
 
