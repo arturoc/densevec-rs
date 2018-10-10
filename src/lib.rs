@@ -332,7 +332,7 @@ impl<K: Key, T: PartialEq> PartialEq for KeyedDenseVec<K,T>{
 }
 
 //TODO: impl OccupiedEntry api
-pub struct OccupiedEntry<'a, K, T: 'a>{
+pub struct OccupiedEntry<'a, K: 'a, T: 'a>{
     storage: &'a mut KeyedDenseVec<K,T>,
     guid: K,
     idx: usize,
@@ -369,7 +369,7 @@ impl<'a, K: Key, T:'a> OccupiedEntry<'a, K, T> {
 }
 
 
-pub struct VacantEntry<'a, K, T: 'a>{
+pub struct VacantEntry<'a, K: 'a, T: 'a>{
     storage: &'a mut KeyedDenseVec<K, T>,
     guid: K,
 }
@@ -385,7 +385,7 @@ impl<'a, K: Key, T:'a> VacantEntry<'a, K, T> {
     }
 }
 
-pub enum Entry<'a, K:Key, T: 'a>{
+pub enum Entry<'a, K:Key + 'a, T: 'a>{
     Occupied(OccupiedEntry<'a, K, T>),
     Vacant(VacantEntry<'a, K, T>),
 }
@@ -499,7 +499,7 @@ impl<'a> ExactSizeIterator for Keys<'a> {
 }
 
 
-pub struct Iter<'a, K, T: 'a>{
+pub struct Iter<'a, K: 'a, T: 'a>{
     storage: &'a KeyedDenseVec<K,T>,
     next: K,
     len: usize,
@@ -537,7 +537,7 @@ impl<'a, K:Key, T> ExactSizeIterator for Iter<'a, K, T> {
     }
 }
 
-pub struct IterMut<'a, K, T: 'a>{
+pub struct IterMut<'a, K: 'a, T: 'a>{
     storage: &'a mut KeyedDenseVec<K, T>,
     next: K,
     len: usize,
