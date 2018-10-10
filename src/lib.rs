@@ -12,25 +12,117 @@ use std::slice;
 use std::usize;
 use std::iter::FromIterator;
 use std::ops::{Index, IndexMut};
+use std::marker::PhantomData;
 
-#[derive(Clone)]
-pub struct DenseVec<T>{
-    storage: Vec<T>,
-    index: Vec<usize>,
+pub trait Key: Clone + PartialEq{
+    fn to_usize(self) -> usize;
+    fn from_usize(k: usize) -> Self;
 }
 
-impl<T> DenseVec<T>{
-    pub fn new() -> DenseVec<T>{
-        DenseVec{
+impl Key for usize{
+    fn to_usize(self) -> usize{
+        self
+    }
+
+    fn from_usize(k: usize) -> Self{
+        k
+    }
+}
+
+impl Key for isize{
+    fn to_usize(self) -> usize{
+        self as usize
+    }
+
+    fn from_usize(k: usize) -> Self{
+        k as isize
+    }
+}
+
+impl Key for u32{
+    fn to_usize(self) -> usize{
+        self as usize
+    }
+
+    fn from_usize(k: usize) -> Self{
+        k as u32
+    }
+}
+
+
+impl Key for i32{
+    fn to_usize(self) -> usize{
+        self as usize
+    }
+
+    fn from_usize(k: usize) -> Self{
+        k as i32
+    }
+}
+
+impl Key for u16{
+    fn to_usize(self) -> usize{
+        self as usize
+    }
+
+    fn from_usize(k: usize) -> Self{
+        k as u16
+    }
+}
+
+impl Key for i16{
+    fn to_usize(self) -> usize{
+        self as usize
+    }
+
+    fn from_usize(k: usize) -> Self{
+        k as i16
+    }
+}
+
+impl Key for u8{
+    fn to_usize(self) -> usize{
+        self as usize
+    }
+
+    fn from_usize(k: usize) -> Self{
+        k as u8
+    }
+}
+
+impl Key for i8{
+    fn to_usize(self) -> usize{
+        self as usize
+    }
+
+    fn from_usize(k: usize) -> Self{
+        k as i8
+    }
+}
+
+pub type DenseVec<T> = KeyedDenseVec<usize, T>;
+
+#[derive(Clone)]
+pub struct KeyedDenseVec<K,T>{
+    storage: Vec<T>,
+    index: Vec<usize>,
+    marker: PhantomData<K>,
+}
+
+impl<K: Key, T> KeyedDenseVec<K,T>{
+    pub fn new() -> KeyedDenseVec<K,T>{
+        KeyedDenseVec{
             storage: vec![],
             index: vec![],
+            marker: PhantomData,
         }
     }
 
     pub fn with_capacity(capacity: usize) -> Self{
-        DenseVec{
+        KeyedDenseVec{
             storage: Vec::with_capacity(capacity),
             index: Vec::with_capacity(capacity),
+            marker: PhantomData,
         }
     }
 
@@ -69,27 +161,27 @@ impl<T> DenseVec<T>{
         self.storage.iter_mut()
     }
 
-    pub fn iter(&self) -> Iter<T>{
+    pub fn iter(&self) -> Iter<K,T>{
         Iter{
-            next: 0,
+            next: K::from_usize(0),
             storage: self,
             len: self.len(),
         }
     }
 
-    pub fn iter_mut(&mut self) -> IterMut<T>{
+    pub fn iter_mut(&mut self) -> IterMut<K,T>{
         IterMut{
-            next: 0,
+            next: K::from_usize(0),
             len: self.len(),
             storage: self,
         }
     }
 
-    pub fn entry(&mut self, guid: usize) -> Entry<T>{
-        if guid >= self.index.len() {
-            Entry::Vacant(VacantEntry{storage: self, guid})
+    pub fn entry(&mut self, guid: K) -> Entry<K,T>{
+        if guid.clone().to_usize() >= self.index.len() {
+            Entry::Vacant(VacantEntry{storage: self, guid: guid.clone()})
         }else{
-            let idx = unsafe{ *self.index.get_unchecked(guid) };
+            let idx = unsafe{ *self.index.get_unchecked(guid.clone().to_usize()) };
             if idx == usize::MAX {
                 Entry::Vacant(VacantEntry{storage: self, guid})
             }else{
@@ -115,21 +207,21 @@ impl<T> DenseVec<T>{
         self.index.clear();
     }
 
-    pub fn get(&self, guid: usize) -> Option<&T>{
-        self.index.get(guid).and_then(|idx|
+    pub fn get(&self, guid: K) -> Option<&T>{
+        self.index.get(guid.to_usize()).and_then(|idx| {
             if *idx != usize::MAX {
                 Some(unsafe{ self.storage.get_unchecked(*idx) })
             }else{
                 None
             }
-        )
+        })
     }
 
-    pub fn get_mut(&mut self, guid: usize) -> Option<&mut T>{
+    pub fn get_mut(&mut self, guid: K) -> Option<&mut T>{
         let storage = unsafe{
             mem::transmute::<&mut Vec<T>, &mut Vec<T>>(&mut self.storage)
         };
-        self.index.get(guid).and_then(move |idx|
+        self.index.get(guid.to_usize()).and_then(move |idx|
             if *idx != usize::MAX {
                 Some(unsafe{ storage.get_unchecked_mut(*idx) })
             }else{
@@ -138,47 +230,47 @@ impl<T> DenseVec<T>{
         )
     }
 
-    pub unsafe fn get_unchecked(&self, guid: usize) -> &T{
-        let idx = *self.index.get_unchecked(guid);
+    pub unsafe fn get_unchecked(&self, guid: K) -> &T{
+        let idx = *self.index.get_unchecked(guid.to_usize());
         self.storage.get_unchecked(idx)
     }
 
-    pub unsafe fn get_unchecked_mut(&mut self, guid: usize) -> &mut T{
-        let idx = *self.index.get_unchecked(guid);
+    pub unsafe fn get_unchecked_mut(&mut self, guid: K) -> &mut T{
+        let idx = *self.index.get_unchecked(guid.to_usize());
         self.storage.get_unchecked_mut(idx)
     }
 
-    pub fn contains_key(&self, guid: usize) -> bool{
-        guid < self.index.len() && unsafe{ *self.index.get_unchecked(guid) } < usize::MAX
+    pub fn contains_key(&self, guid: K) -> bool{
+        guid.clone().to_usize() < self.index.len() && unsafe{ *self.index.get_unchecked(guid.to_usize()) } < usize::MAX
     }
 
-    pub fn insert(&mut self, guid: usize, t: T) -> Option<T> {
-        if !self.contains_key(guid) {
+    pub fn insert(&mut self, guid: K, t: T) -> Option<T> {
+        if !self.contains_key(guid.clone()) {
             let id = self.storage.len();
             self.storage.push(t);
-            if self.index.len() < guid + 1{
-                self.index.resize(guid + 1, usize::MAX)
+            if self.index.len() < guid.clone().to_usize() + 1{
+                self.index.resize(guid.clone().to_usize() + 1, usize::MAX)
             }
-            unsafe{ ptr::write(self.index.get_unchecked_mut(guid), id) };
+            unsafe{ ptr::write(self.index.get_unchecked_mut(guid.to_usize()), id) };
             None
         } else {
-            let idx = unsafe{ self.index.get_unchecked(guid) };
-            if *idx != usize::MAX {
-                Some(mem::replace(unsafe{ self.storage.get_unchecked_mut(*idx) }, t))
+            let idx = unsafe{ *self.index.get_unchecked(guid.to_usize()) };
+            if idx != usize::MAX {
+                Some(mem::replace(unsafe{ self.storage.get_unchecked_mut(idx) }, t))
             }else{
                 None
             }
         }
     }
 
-    pub fn remove(&mut self, guid: usize) -> Option<T> {
+    pub fn remove(&mut self, guid: K) -> Option<T> {
         let storage = unsafe{
             mem::transmute::<&mut Vec<T>, &mut Vec<T>>(&mut self.storage)
         };
         let index = unsafe{
             mem::transmute::<&mut Vec<usize>, &mut Vec<usize>>(&mut self.index)
         };
-        self.index.get_mut(guid).and_then(move |idx|
+        self.index.get_mut(guid.to_usize()).and_then(move |idx|
             if *idx != usize::MAX {
                 let ret = storage.remove(*idx);
                 for i in index.iter_mut().filter(|i| **i > *idx && **i < usize::MAX){
@@ -190,6 +282,13 @@ impl<T> DenseVec<T>{
                 None
             }
         )
+    }
+
+    pub fn insert_key_gen(&mut self, value: T) -> K{
+        let key = K::from_usize(self.index.len());
+        let ret = self.insert(key.clone(), value);
+        debug_assert!(ret.is_none());
+        key
     }
 }
 
@@ -205,16 +304,16 @@ impl<T: Send + Sync> DenseVec<T>{
 }
 
 use std::fmt::{self, Debug};
-impl<T: Debug> Debug for DenseVec<T>{
+impl<K: Key + Debug, T: Debug> Debug for KeyedDenseVec<K,T>{
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result{
         f.write_str("{").and_then(|_|{
             let mut iter = self.iter();
             let err = match iter.next(){
-                Some((k,v)) => f.write_str(&format!("{}: {:?}", k, v) ),
+                Some((k,v)) => f.write_str(&format!("{:?}: {:?}", k, v) ),
                 None => Ok(()),
             };
             if let Ok(()) = err {
-                iter.map(|(k,v)| f.write_str(&format!(", {}: {:?}", k, v) ))
+                iter.map(|(k,v)| f.write_str(&format!(", {:?}: {:?}", k, v) ))
                     .find(|result| match result{
                         &Err(_) => true,
                         &Ok(()) => false,
@@ -226,20 +325,20 @@ impl<T: Debug> Debug for DenseVec<T>{
     }
 }
 
-impl<T: PartialEq> PartialEq for DenseVec<T>{
-    fn eq(&self, other: &DenseVec<T>) -> bool{
+impl<K: Key, T: PartialEq> PartialEq for KeyedDenseVec<K,T>{
+    fn eq(&self, other: &KeyedDenseVec<K,T>) -> bool{
         self.len() == other.len() && self.iter().zip(other.iter()).all(|((k1,v1), (k2,v2))| k1 == k2 && v1 == v2 )
     }
 }
 
 //TODO: impl OccupiedEntry api
-pub struct OccupiedEntry<'a, T: 'a>{
-    storage: &'a mut DenseVec<T>,
-    guid: usize,
+pub struct OccupiedEntry<'a, K, T: 'a>{
+    storage: &'a mut KeyedDenseVec<K,T>,
+    guid: K,
     idx: usize,
 }
 
-impl<'a, T:'a> OccupiedEntry<'a, T> {
+impl<'a, K: Key, T:'a> OccupiedEntry<'a, K, T> {
     pub fn get(&self) -> &T{
         unsafe{ self.storage.storage.get_unchecked(self.idx) }
     }
@@ -252,12 +351,12 @@ impl<'a, T:'a> OccupiedEntry<'a, T> {
         mem::replace(self.get_mut(), t)
     }
 
-    pub fn key(&self) -> usize{
-        self.guid
+    pub fn key(&self) -> K{
+        self.guid.clone()
     }
 
-    pub fn remove_entry(self) -> (usize, T) {
-        (self.guid, self.storage.remove(self.guid).unwrap())
+    pub fn remove_entry(self) -> (K, T) {
+        (self.guid.clone(), self.storage.remove(self.guid).unwrap())
     }
 
     pub fn into_mut(self) -> &'a mut T{
@@ -265,38 +364,38 @@ impl<'a, T:'a> OccupiedEntry<'a, T> {
     }
 
     pub fn remove(&mut self) -> T {
-        self.storage.remove(self.guid).unwrap()
+        self.storage.remove(self.guid.clone()).unwrap()
     }
 }
 
 
-pub struct VacantEntry<'a, T: 'a>{
-    storage: &'a mut DenseVec<T>,
-    guid: usize,
+pub struct VacantEntry<'a, K, T: 'a>{
+    storage: &'a mut KeyedDenseVec<K, T>,
+    guid: K,
 }
 
-impl<'a, T:'a> VacantEntry<'a, T> {
+impl<'a, K: Key, T:'a> VacantEntry<'a, K, T> {
     pub fn insert(&mut self, t: T) -> &mut T{
-        self.storage.insert(self.guid, t);
-        unsafe{ self.storage.get_unchecked_mut(self.guid) }
+        self.storage.insert(self.guid.clone(), t);
+        unsafe{ self.storage.get_unchecked_mut(self.guid.clone()) }
     }
 
-    pub fn key(&self) -> usize {
-        self.guid
+    pub fn key(&self) -> K {
+        self.guid.clone()
     }
 }
 
-pub enum Entry<'a, T: 'a>{
-    Occupied(OccupiedEntry<'a, T>),
-    Vacant(VacantEntry<'a, T>),
+pub enum Entry<'a, K:Key, T: 'a>{
+    Occupied(OccupiedEntry<'a, K, T>),
+    Vacant(VacantEntry<'a, K, T>),
 }
 
-impl<'a, T: 'a> Entry<'a, T>{
+impl<'a, K: Key, T: 'a> Entry<'a, K, T>{
     pub fn or_insert(self, default: T) -> &'a mut T{
         match self{
             Entry::Occupied(occupied) => occupied.into_mut(),
             Entry::Vacant(VacantEntry{storage, guid}) => {
-                storage.insert(guid, default);
+                storage.insert(guid.clone(), default);
                 unsafe{ storage.get_unchecked_mut(guid) }
             }
         }
@@ -308,22 +407,22 @@ impl<'a, T: 'a> Entry<'a, T>{
         match self{
             Entry::Occupied(occupied) => occupied.into_mut(),
             Entry::Vacant(VacantEntry{storage, guid}) => {
-                storage.insert(guid, default());
+                storage.insert(guid.clone(), default());
                 unsafe{ storage.get_unchecked_mut(guid) }
             }
         }
     }
 }
 
-pub struct IntoIter<T> {
-    storage: DenseVec<T>,
+pub struct IntoIter<K, T> {
+    storage: KeyedDenseVec<K, T>,
     next: usize,
     len: usize,
 }
 
-impl<T> IntoIterator for DenseVec<T>{
+impl<K:Key,T> IntoIterator for KeyedDenseVec<K, T>{
     type Item = (usize, T);
-    type IntoIter = IntoIter<T>;
+    type IntoIter = IntoIter<K,T>;
     fn into_iter(self) -> Self::IntoIter{
         IntoIter{
             next: 0,
@@ -333,7 +432,7 @@ impl<T> IntoIterator for DenseVec<T>{
     }
 }
 
-impl<T> Iterator for IntoIter<T>{
+impl<K: Key,T> Iterator for IntoIter<K,T>{
     type Item = (usize, T);
     fn next(&mut self) -> Option<(usize, T)> {
         unsafe {
@@ -357,7 +456,7 @@ impl<T> Iterator for IntoIter<T>{
     }
 }
 
-impl<T> ExactSizeIterator for IntoIter<T> {
+impl<K:Key,T> ExactSizeIterator for IntoIter<K,T> {
     fn len(&self) -> usize {
         self.len
     }
@@ -400,26 +499,28 @@ impl<'a> ExactSizeIterator for Keys<'a> {
 }
 
 
-pub struct Iter<'a, T: 'a>{
-    storage: &'a DenseVec<T>,
-    next: usize,
+pub struct Iter<'a, K, T: 'a>{
+    storage: &'a KeyedDenseVec<K,T>,
+    next: K,
     len: usize,
 }
 
-impl<'a, T: 'a> Iterator for Iter<'a, T>{
-    type Item = (usize, &'a T);
-    fn next(&mut self) -> Option<(usize, &'a T)>{
+impl<'a, K: Key, T: 'a> Iterator for Iter<'a, K, T>{
+    type Item = (K, &'a T);
+    fn next(&mut self) -> Option<(K, &'a T)>{
         unsafe {
-            while self.next < self.storage.index.len()  && *self.storage.index.get_unchecked(self.next) == usize::MAX {
-                self.next += 1;
+            while self.next.clone().to_usize() < self.storage.index.len()  &&
+                *self.storage.index.get_unchecked(self.next.clone().to_usize()) == usize::MAX
+            {
+                self.next = K::from_usize(self.next.clone().to_usize() + 1);
             }
-            if self.next == self.storage.index.len() {
+            if self.next.clone().to_usize() == self.storage.index.len() {
                 None
             }else{
-                let id = self.next;
-                self.next += 1;
+                let id = self.next.clone();
+                self.next = K::from_usize(self.next.clone().to_usize() + 1);
                 self.len -= 1;
-                Some((id, self.storage.storage.get_unchecked(*self.storage.index.get_unchecked(id))))
+                Some((id.clone(), self.storage.storage.get_unchecked(*self.storage.index.get_unchecked(id.to_usize()))))
             }
         }
     }
@@ -430,33 +531,34 @@ impl<'a, T: 'a> Iterator for Iter<'a, T>{
 }
 
 
-impl<'a, T> ExactSizeIterator for Iter<'a, T> {
+impl<'a, K:Key, T> ExactSizeIterator for Iter<'a, K, T> {
     fn len(&self) -> usize {
         self.len
     }
 }
 
-pub struct IterMut<'a, T: 'a>{
-    storage: &'a mut DenseVec<T>,
-    next: usize,
+pub struct IterMut<'a, K, T: 'a>{
+    storage: &'a mut KeyedDenseVec<K, T>,
+    next: K,
     len: usize,
 }
 
-impl<'a, T: 'a> Iterator for IterMut<'a, T>{
-    type Item = (usize, &'a mut T);
-    fn next(&mut self) -> Option<(usize, &'a mut T)>{
+impl<'a, K: Key, T: 'a> Iterator for IterMut<'a, K, T>{
+    type Item = (K, &'a mut T);
+    fn next(&mut self) -> Option<(K, &'a mut T)>{
         unsafe {
-            while self.next < self.storage.index.len()  && *self.storage.index.get_unchecked(self.next) == usize::MAX {
-                self.next += 1;
+            while self.next.clone().to_usize() < self.storage.index.len()  &&
+                *self.storage.index.get_unchecked(self.next.clone().to_usize()) == usize::MAX {
+                self.next = K::from_usize(self.next.clone().to_usize() + 1);
             }
-            if self.next == self.storage.index.len() {
+            if self.next.clone().to_usize() == self.storage.index.len() {
                 None
             }else{
-                let id = self.next;
-                self.next += 1;
+                let id = self.next.clone();
+                self.next = K::from_usize(self.next.clone().to_usize() + 1);
                 self.len -= 1;
                 let storage = mem::transmute::<&mut Vec<T>, &mut Vec<T>>(&mut self.storage.storage);
-                Some((id, storage.get_unchecked_mut(*self.storage.index.get_unchecked(id))))
+                Some((id.clone(), storage.get_unchecked_mut(*self.storage.index.get_unchecked(id.to_usize()))))
             }
         }
     }
@@ -466,21 +568,21 @@ impl<'a, T: 'a> Iterator for IterMut<'a, T>{
     }
 }
 
-impl<'a, T> ExactSizeIterator for IterMut<'a, T> {
+impl<'a, K:Key, T> ExactSizeIterator for IterMut<'a, K, T> {
     fn len(&self) -> usize {
         self.len
     }
 }
 
 
-impl<T> FromIterator<(usize,T)> for DenseVec<T>{
-    fn from_iter<I>(iter: I) -> DenseVec<T>
-    where I: IntoIterator<Item = (usize,T)>
+impl<K: Key, T> FromIterator<(K,T)> for KeyedDenseVec<K, T>{
+    fn from_iter<I>(iter: I) -> KeyedDenseVec<K, T>
+    where I: IntoIterator<Item = (K,T)>
     {
         let iter = iter.into_iter();
         let mut dense_vec = match iter.size_hint(){
-            (_lower, Some(upper)) => DenseVec::with_capacity(upper),
-            (lower, None) => DenseVec::with_capacity(lower),
+            (_lower, Some(upper)) => KeyedDenseVec::with_capacity(upper),
+            (lower, None) => KeyedDenseVec::with_capacity(lower),
         };
         for (id, t) in iter {
             dense_vec.insert(id, t);
@@ -489,51 +591,51 @@ impl<T> FromIterator<(usize,T)> for DenseVec<T>{
     }
 }
 
-impl<'a, T> IntoIterator for &'a DenseVec<T>{
-    type Item = (usize, &'a T);
-    type IntoIter = Iter<'a, T>;
+impl<'a, K:Key, T> IntoIterator for &'a KeyedDenseVec<K,T>{
+    type Item = (K, &'a T);
+    type IntoIter = Iter<'a, K,T>;
     fn into_iter(self) -> Self::IntoIter{
         self.iter()
     }
 }
 
-impl<'a, T> IntoIterator for &'a mut DenseVec<T>{
-    type Item = (usize, &'a mut T);
-    type IntoIter = IterMut<'a, T>;
+impl<'a, K:Key, T> IntoIterator for &'a mut KeyedDenseVec<K,T>{
+    type Item = (K, &'a mut T);
+    type IntoIter = IterMut<'a, K,T>;
     fn into_iter(self) -> Self::IntoIter{
         self.iter_mut()
     }
 }
 
-impl<T> Default for DenseVec<T>{
-    fn default() -> DenseVec<T>{
-        DenseVec::new()
+impl<K:Key, T> Default for KeyedDenseVec<K,T>{
+    fn default() -> KeyedDenseVec<K,T>{
+        KeyedDenseVec::new()
     }
 }
 
-impl<T> Index<usize> for DenseVec<T>{
+impl<K:Key, T> Index<K> for KeyedDenseVec<K,T>{
     type Output = T;
-    fn index(&self, i: usize) -> &T {
+    fn index(&self, i: K) -> &T {
         self.get(i).expect("no entry found for key")
     }
 }
 
-impl<T> IndexMut<usize> for DenseVec<T>{
-    fn index_mut(&mut self, i: usize) -> &mut T {
+impl<K:Key, T> IndexMut<K> for KeyedDenseVec<K,T>{
+    fn index_mut(&mut self, i: K) -> &mut T {
         self.get_mut(i).expect("no entry found for key")
     }
 }
 
-impl<T> Extend<(usize, T)> for DenseVec<T>{
-    fn extend<I>(&mut self, iter: I) where I: IntoIterator<Item = (usize, T)>{
+impl<K:Key,T> Extend<(K, T)> for KeyedDenseVec<K,T>{
+    fn extend<I>(&mut self, iter: I) where I: IntoIterator<Item = (K, T)>{
         for (guid, t) in iter {
             self.insert(guid, t);
         }
     }
 }
 
-impl<'a, T: 'a + Copy> Extend<(usize, &'a T)> for DenseVec<T>{
-    fn extend<I>(&mut self, iter: I) where I: IntoIterator<Item = (usize, &'a T)>{
+impl<'a, K:Key, T: 'a + Copy> Extend<(K, &'a T)> for KeyedDenseVec<K,T>{
+    fn extend<I>(&mut self, iter: I) where I: IntoIterator<Item = (K, &'a T)>{
         for (guid, t) in iter {
             self.insert(guid, *t);
         }
@@ -1179,6 +1281,17 @@ mod test_map {
         }
         assert_eq!(a.len(), 1);
         assert_eq!(a[key], value);
+    }
+
+    #[test]
+    fn test_key_gen() {
+        let mut a = DenseVec::new();
+        let keys = (0..1000)
+            .map(|i| a.insert_key_gen(0))
+            .collect::<Vec<_>>();
+        for k in keys {
+            assert!(a.get(k).is_some());
+        }
     }
 
     // #[test]
