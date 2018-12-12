@@ -293,11 +293,15 @@ impl<K: Key, T> KeyedDenseVec<K,T>{
 }
 
 #[cfg(feature="parallel")]
-impl<T: Send + Sync> DenseVec<T>{
+impl<T: Sync> DenseVec<T>{
     pub fn par_values(&self) -> rayon::slice::Iter<T> {
         self.storage.par_iter()
     }
+}
 
+
+#[cfg(feature="parallel")]
+impl<T: Send> DenseVec<T>{
     pub fn par_values_mut(&mut self) -> rayon::slice::IterMut<T> {
         self.storage.par_iter_mut()
     }
