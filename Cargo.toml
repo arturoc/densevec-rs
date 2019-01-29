@@ -7,7 +7,7 @@ repository = "https://github.com/arturoc/densevec-rs"
 documentation = "http://rin.rs/docs/densevec/"
 readme = "README.md"
 license = "MIT"
-version = "0.3.2"
+version = "0.3.3"
 
 [dependencies]
 rayon = {version = "1.0", optional = true}

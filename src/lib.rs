@@ -290,6 +290,12 @@ impl<K: Key, T> KeyedDenseVec<K,T>{
         debug_assert!(ret.is_none());
         key
     }
+
+    pub fn swap(&mut self, guid1: K, guid2: K){
+        let i1 = self.index[guid1.to_usize()];
+        let i2 = self.index[guid2.to_usize()];
+        self.storage.swap(i1, i2)
+    }
 }
 
 #[cfg(feature="parallel")]
