@@ -14,6 +14,10 @@ use std::iter::FromIterator;
 use std::ops::{Index, IndexMut};
 use std::marker::PhantomData;
 
+pub use set::KeyedDenseSet;
+
+pub mod set;
+
 pub trait Key: Clone + PartialEq{
     fn to_usize(self) -> usize;
     fn from_usize(k: usize) -> Self;
@@ -29,16 +33,6 @@ impl Key for usize{
     }
 }
 
-impl Key for isize{
-    fn to_usize(self) -> usize{
-        self as usize
-    }
-
-    fn from_usize(k: usize) -> Self{
-        k as isize
-    }
-}
-
 impl Key for u32{
     fn to_usize(self) -> usize{
         self as usize
@@ -46,17 +40,6 @@ impl Key for u32{
 
     fn from_usize(k: usize) -> Self{
         k as u32
-    }
-}
-
-
-impl Key for i32{
-    fn to_usize(self) -> usize{
-        self as usize
-    }
-
-    fn from_usize(k: usize) -> Self{
-        k as i32
     }
 }
 
@@ -70,16 +53,6 @@ impl Key for u16{
     }
 }
 
-impl Key for i16{
-    fn to_usize(self) -> usize{
-        self as usize
-    }
-
-    fn from_usize(k: usize) -> Self{
-        k as i16
-    }
-}
-
 impl Key for u8{
     fn to_usize(self) -> usize{
         self as usize
@@ -90,30 +63,30 @@ impl Key for u8{
     }
 }
 
-impl Key for i8{
-    fn to_usize(self) -> usize{
-        self as usize
-    }
-
-    fn from_usize(k: usize) -> Self{
-        k as i8
-    }
-}
-
 pub type DenseVec<T> = KeyedDenseVec<usize, T>;
+pub type DenseSet = KeyedDenseSet<usize>;
 
-#[derive(Clone)]
 pub struct KeyedDenseVec<K,T>{
     storage: Vec<T>,
     index: Vec<usize>,
     marker: PhantomData<K>,
 }
 
+impl<K, T: Clone> Clone for KeyedDenseVec<K,T>{
+    fn clone(&self) -> KeyedDenseVec<K,T>{
+        KeyedDenseVec{
+            storage: self.storage.clone(),
+            index: self.index.clone(),
+            marker: PhantomData
+        }
+    }
+}
+
 impl<K: Key, T> KeyedDenseVec<K,T>{
     pub fn new() -> KeyedDenseVec<K,T>{
         KeyedDenseVec{
-            storage: vec![],
-            index: vec![],
+            storage: Vec::new(),
+            index: Vec::new(),
             marker: PhantomData,
         }
     }
@@ -128,6 +101,10 @@ impl<K: Key, T> KeyedDenseVec<K,T>{
 
     pub fn capacity(&self) -> usize {
         self.storage.capacity()
+    }
+
+    fn keys_capacity(&self) -> usize {
+        self.index.capacity()
     }
 
     pub fn reserve(&mut self, additional: usize){
@@ -145,11 +122,12 @@ impl<K: Key, T> KeyedDenseVec<K,T>{
         self.index.shrink_to_fit();
     }
 
-    pub fn keys(&self) -> Keys {
+    pub fn keys(&self) -> Keys<K> {
         Keys{
             next: 0,
             indices: &self.index,
             len: self.len(),
+            marker: PhantomData,
         }
     }
 
@@ -431,7 +409,7 @@ pub struct IntoIter<K, T> {
 }
 
 impl<K:Key,T> IntoIterator for KeyedDenseVec<K, T>{
-    type Item = (usize, T);
+    type Item = (K, T);
     type IntoIter = IntoIter<K,T>;
     fn into_iter(self) -> Self::IntoIter{
         IntoIter{
@@ -442,9 +420,15 @@ impl<K:Key,T> IntoIterator for KeyedDenseVec<K, T>{
     }
 }
 
+impl<K:Key, T> IntoIter<K,T>{
+    pub fn iter(&self) -> Iter<K,T>{
+        self.storage.iter()
+    }
+}
+
 impl<K: Key,T> Iterator for IntoIter<K,T>{
-    type Item = (usize, T);
-    fn next(&mut self) -> Option<(usize, T)> {
+    type Item = (K, T);
+    fn next(&mut self) -> Option<(K, T)> {
         unsafe {
             while self.next < self.storage.index.len()  && *self.storage.index.get_unchecked(self.next) == usize::MAX {
                 self.next += 1;
@@ -456,7 +440,7 @@ impl<K: Key,T> Iterator for IntoIter<K,T>{
                 self.next += 1;
                 self.len -= 1;
                 let t = mem::replace(self.storage.storage.get_unchecked_mut(id), mem::uninitialized());
-                Some((id, t))
+                Some((K::from_usize(id), t))
             }
         }
     }
@@ -472,15 +456,16 @@ impl<K:Key,T> ExactSizeIterator for IntoIter<K,T> {
     }
 }
 
-pub struct Keys<'a>{
+pub struct Keys<'a, K>{
     next: usize,
     len: usize,
     indices: &'a [usize],
+    marker: PhantomData<K>,
 }
 
-impl<'a> Iterator for Keys<'a>{
-    type Item = usize;
-    fn next(&mut self) -> Option<usize>{
+impl<'a, K: Key> Iterator for Keys<'a, K>{
+    type Item = K;
+    fn next(&mut self) -> Option<K>{
         unsafe {
             while self.next < self.indices.len() && *self.indices.get_unchecked(self.next) == usize::MAX {
                 self.next += 1;
@@ -491,7 +476,7 @@ impl<'a> Iterator for Keys<'a>{
                 let id = self.next;
                 self.next += 1;
                 self.len -= 1;
-                Some(id)
+                Some(K::from_usize(id))
             }
         }
     }
@@ -502,7 +487,19 @@ impl<'a> Iterator for Keys<'a>{
 }
 
 
-impl<'a> ExactSizeIterator for Keys<'a> {
+impl<K:Key> Clone for Keys<'_, K>{
+    #[inline]
+    fn clone(&self) -> Self{
+        Keys{
+            next: self.next,
+            len: self.len,
+            indices: self.indices,
+            marker: PhantomData
+        }
+    }
+}
+
+impl<'a, K: Key> ExactSizeIterator for Keys<'a, K> {
     fn len(&self) -> usize {
         self.len
     }
