@@ -3,8 +3,20 @@
 #[cfg(feature="parallel")]
 extern crate rayon;
 
+#[cfg(feature="serialize")]
+extern crate serde;
+
+#[cfg(feature="serialize")]
+#[macro_use] extern crate serde_derive;
+
 #[cfg(feature="parallel")]
 use rayon::prelude::*;
+
+#[cfg(feature="serialize")]
+use serde::{
+    Serialize, Serializer, ser::SerializeStruct,
+    Deserialize, Deserializer
+};
 
 use std::mem;
 use std::ptr;
@@ -13,10 +25,6 @@ use std::usize;
 use std::iter::FromIterator;
 use std::ops::{Index, IndexMut};
 use std::marker::PhantomData;
-
-pub use set::KeyedDenseSet;
-
-pub mod set;
 
 pub trait Key: Clone + PartialEq{
     fn to_usize(self) -> usize;
@@ -64,12 +72,45 @@ impl Key for u8{
 }
 
 pub type DenseVec<T> = KeyedDenseVec<usize, T>;
-pub type DenseSet = KeyedDenseSet<usize>;
 
 pub struct KeyedDenseVec<K,T>{
     storage: Vec<T>,
     index: Vec<usize>,
     marker: PhantomData<K>,
+}
+
+impl<K,T: Serialize> serde::Serialize for KeyedDenseVec<K,T>{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut state = serializer.serialize_struct("KeyedDenseVec", 2)?;
+        state.serialize_field("storage", &self.storage)?;
+        state.serialize_field("index", &self.index)?;
+        state.end()
+    }
+}
+
+impl<'de, K, T: Deserialize<'de>> Deserialize<'de> for KeyedDenseVec<K,T> {
+    fn deserialize<D>(deserializer: D) -> Result<KeyedDenseVec<K,T>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        mod deserializer{
+            #[derive(Deserialize)]
+            pub struct KeyedDenseVec<T>{
+                pub storage: Vec<T>,
+                pub index: Vec<usize>,
+            }
+        }
+
+        let densevec = deserializer::KeyedDenseVec::deserialize(deserializer)?;
+        Ok(KeyedDenseVec{
+            storage: densevec.storage,
+            index: densevec.index,
+            marker: PhantomData
+        })
+    }
 }
 
 impl<K, T: Clone> Clone for KeyedDenseVec<K,T>{
@@ -277,17 +318,45 @@ impl<K: Key, T> KeyedDenseVec<K,T>{
 }
 
 #[cfg(feature="parallel")]
-impl<T: Sync> DenseVec<T>{
+impl<K, T: Sync> KeyedDenseVec<K,T>{
     pub fn par_values(&self) -> rayon::slice::Iter<T> {
         self.storage.par_iter()
     }
 }
 
+#[cfg(feature="parallel")]
+impl<K: Key + Send + Sync, T: Sync> KeyedDenseVec<K,T>{
+    pub fn par_iter(&self) -> impl rayon::iter::ParallelIterator<Item = (K, &T)> + '_{
+        self.index.par_iter().filter_map(move |id| {
+            if *id == usize::MAX {
+                None
+            }else{
+                Some((K::from_usize(*id), unsafe{ self.storage.get_unchecked(*id) }))
+            }
+        })
+    }
+}
+
 
 #[cfg(feature="parallel")]
-impl<T: Send> DenseVec<T>{
+impl<K, T: Send> KeyedDenseVec<K,T>{
     pub fn par_values_mut(&mut self) -> rayon::slice::IterMut<T> {
         self.storage.par_iter_mut()
+    }
+}
+
+#[cfg(feature="parallel")]
+impl<K: Key + Send + Sync, T: Send + Sync> KeyedDenseVec<K,T>{
+    pub fn par_iter_mut(&mut self) -> impl rayon::iter::ParallelIterator<Item = (K, &mut T)> + '_{
+        let storage = unsafe{ mem::transmute::<&Vec<T>, &Vec<T>>(&self.storage) };
+        self.index.par_iter().filter_map(move |id| {
+            if *id == usize::MAX {
+                None
+            }else{
+                let storage = storage as *const Vec<T> as *mut Vec<T>;
+                Some((K::from_usize(*id), unsafe{ (*storage).get_unchecked_mut(*id) }))
+            }
+        })
     }
 }
 
@@ -318,6 +387,8 @@ impl<K: Key, T: PartialEq> PartialEq for KeyedDenseVec<K,T>{
         self.len() == other.len() && self.iter().zip(other.iter()).all(|((k1,v1), (k2,v2))| k1 == k2 && v1 == v2 )
     }
 }
+
+impl<K: Key, T: Eq> Eq for KeyedDenseVec<K,T>{}
 
 //TODO: impl OccupiedEntry api
 pub struct OccupiedEntry<'a, K: 'a, T: 'a>{
