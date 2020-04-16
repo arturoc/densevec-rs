@@ -79,6 +79,7 @@ pub struct KeyedDenseVec<K,T>{
     marker: PhantomData<K>,
 }
 
+#[cfg(feature="serialize")]
 impl<K,T: Serialize> serde::Serialize for KeyedDenseVec<K,T>{
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -91,6 +92,7 @@ impl<K,T: Serialize> serde::Serialize for KeyedDenseVec<K,T>{
     }
 }
 
+#[cfg(feature="serialize")]
 impl<'de, K, T: Deserialize<'de>> Deserialize<'de> for KeyedDenseVec<K,T> {
     fn deserialize<D>(deserializer: D) -> Result<KeyedDenseVec<K,T>, D::Error>
     where
