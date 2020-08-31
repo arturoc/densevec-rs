@@ -1,6 +1,6 @@
 #![cfg_attr(feature = "unstable", feature(test))]
 
-#[cfg(feature="parallel")]
+#[cfg(feature="rayon")]
 extern crate rayon;
 
 #[cfg(feature="serialize")]
@@ -9,7 +9,7 @@ extern crate serde;
 #[cfg(feature="serialize")]
 #[macro_use] extern crate serde_derive;
 
-#[cfg(feature="parallel")]
+#[cfg(feature="rayon")]
 use rayon::prelude::*;
 
 #[cfg(feature="serialize")]
@@ -17,6 +17,9 @@ use serde::{
     Serialize, Serializer, ser::SerializeStruct,
     Deserialize, Deserializer
 };
+
+#[cfg(feature="rayon")]
+use rayon::iter::{FromParallelIterator, plumbing::UnindexedConsumer};
 
 use std::mem;
 use std::ptr;
@@ -38,6 +41,16 @@ impl Key for usize{
 
     fn from_usize(k: usize) -> Self{
         k
+    }
+}
+
+impl Key for u64{
+    fn to_usize(self) -> usize{
+        self as usize
+    }
+
+    fn from_usize(k: usize) -> Self{
+        k as u64
     }
 }
 
@@ -73,8 +86,66 @@ impl Key for u8{
 
 pub type DenseVec<T> = KeyedDenseVec<usize, T>;
 
+#[derive(Clone, Debug)]
+struct Storage<T> {
+    storage: Vec<Option<T>>,
+    free: Vec<usize>
+}
+
+impl<T> Storage<T> {
+    fn new() -> Storage<T> {
+        Storage {
+            storage: Vec::new(),
+            free: Vec::new(),
+        }
+    }
+
+    fn with_capacity(capacity: usize) -> Storage<T> {
+        Storage {
+            storage: Vec::with_capacity(capacity),
+            free: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, t: T) -> usize {
+        if let Some(free) = self.free.pop() {
+            unsafe{ *self.storage.get_unchecked_mut(free) = Some(t) };
+            free
+        }else{
+            let id = self.storage.len();
+            self.storage.push(Some(t));
+            id
+        }
+    }
+
+    pub fn len(&self) -> usize{
+        self.storage.len() - self.free.len()
+    }
+
+    pub fn is_empty(&self) -> bool{
+        self.storage.len() - self.free.len() == 0
+    }
+
+    pub fn clear(&mut self) {
+        self.storage.clear();
+        self.free.clear();
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.storage.capacity()
+    }
+
+    pub fn reserve(&mut self, additional: usize) {
+        self.storage.reserve(additional)
+    }
+
+    pub fn reserve_exact(&mut self, additional: usize) {
+        self.storage.reserve_exact(additional)
+    }
+}
+
 pub struct KeyedDenseVec<K,T>{
-    storage: Vec<T>,
+    storage: Storage<T>,
     index: Vec<usize>,
     marker: PhantomData<K>,
 }
@@ -128,7 +199,7 @@ impl<K, T: Clone> Clone for KeyedDenseVec<K,T>{
 impl<K: Key, T> KeyedDenseVec<K,T>{
     pub fn new() -> KeyedDenseVec<K,T>{
         KeyedDenseVec{
-            storage: Vec::new(),
+            storage: Storage::new(),
             index: Vec::new(),
             marker: PhantomData,
         }
@@ -136,7 +207,7 @@ impl<K: Key, T> KeyedDenseVec<K,T>{
 
     pub fn with_capacity(capacity: usize) -> Self{
         KeyedDenseVec{
-            storage: Vec::with_capacity(capacity),
+            storage: Storage::with_capacity(capacity),
             index: Vec::with_capacity(capacity),
             marker: PhantomData,
         }
@@ -161,7 +232,7 @@ impl<K: Key, T> KeyedDenseVec<K,T>{
     }
 
     pub fn shrink_to_fit(&mut self){
-        self.storage.shrink_to_fit();
+        self.storage.storage.shrink_to_fit();
         self.index.shrink_to_fit();
     }
 
@@ -174,12 +245,12 @@ impl<K: Key, T> KeyedDenseVec<K,T>{
         }
     }
 
-    pub fn values(&self) -> slice::Iter<T> {
-        self.storage.iter()
+    pub fn values(&self) -> Values<T> {
+        Values{ iter: self.storage.storage.iter() }
     }
 
-    pub fn values_mut(&mut self) -> slice::IterMut<T> {
-        self.storage.iter_mut()
+    pub fn values_mut(&mut self) -> ValuesMut<T> {
+        ValuesMut{ iter: self.storage.storage.iter_mut() }
     }
 
     pub fn iter(&self) -> Iter<K,T>{
@@ -231,7 +302,7 @@ impl<K: Key, T> KeyedDenseVec<K,T>{
     pub fn get(&self, guid: K) -> Option<&T>{
         self.index.get(guid.to_usize()).and_then(|idx| {
             if *idx != usize::MAX {
-                Some(unsafe{ self.storage.get_unchecked(*idx) })
+                unsafe{ self.storage.storage.get_unchecked(*idx).as_ref() }
             }else{
                 None
             }
@@ -239,12 +310,10 @@ impl<K: Key, T> KeyedDenseVec<K,T>{
     }
 
     pub fn get_mut(&mut self, guid: K) -> Option<&mut T>{
-        let storage = unsafe{
-            mem::transmute::<&mut Vec<T>, &mut Vec<T>>(&mut self.storage)
-        };
+        let storage = &mut self.storage;
         self.index.get(guid.to_usize()).and_then(move |idx|
             if *idx != usize::MAX {
-                Some(unsafe{ storage.get_unchecked_mut(*idx) })
+                unsafe{ storage.storage.get_unchecked_mut(*idx) }.as_mut()
             }else{
                 None
             }
@@ -253,12 +322,12 @@ impl<K: Key, T> KeyedDenseVec<K,T>{
 
     pub unsafe fn get_unchecked(&self, guid: K) -> &T{
         let idx = *self.index.get_unchecked(guid.to_usize());
-        self.storage.get_unchecked(idx)
+        self.storage.storage.get_unchecked(idx).as_ref().unwrap()
     }
 
     pub unsafe fn get_unchecked_mut(&mut self, guid: K) -> &mut T{
         let idx = *self.index.get_unchecked(guid.to_usize());
-        self.storage.get_unchecked_mut(idx)
+        self.storage.storage.get_unchecked_mut(idx).as_mut().unwrap()
     }
 
     pub fn contains_key(&self, guid: K) -> bool{
@@ -266,43 +335,55 @@ impl<K: Key, T> KeyedDenseVec<K,T>{
     }
 
     pub fn insert(&mut self, guid: K, t: T) -> Option<T> {
-        if !self.contains_key(guid.clone()) {
-            let id = self.storage.len();
-            self.storage.push(t);
-            if self.index.len() < guid.clone().to_usize() + 1{
-                self.index.resize(guid.clone().to_usize() + 1, usize::MAX)
-            }
+        if self.index.len() < guid.clone().to_usize() + 1{
+            let id = self.storage.push(t);
+            self.index.resize(guid.clone().to_usize() + 1, usize::MAX);
             unsafe{ ptr::write(self.index.get_unchecked_mut(guid.to_usize()), id) };
             None
-        } else {
-            let idx = unsafe{ *self.index.get_unchecked(guid.to_usize()) };
-            if idx != usize::MAX {
-                Some(mem::replace(unsafe{ self.storage.get_unchecked_mut(idx) }, t))
-            }else{
+        }else{
+            let current_idx = unsafe{ self.index.get_unchecked_mut(guid.to_usize()) };
+            if *current_idx == usize::MAX {
+                let id = self.storage.push(t);
+                unsafe{ ptr::write(current_idx, id) };
                 None
+            } else {
+                mem::replace(
+                    unsafe{ self.storage.storage.get_unchecked_mut(*current_idx) },
+                    Some(t)
+                )
             }
         }
     }
 
     pub fn remove(&mut self, guid: K) -> Option<T> {
-        let storage = unsafe{
-            mem::transmute::<&mut Vec<T>, &mut Vec<T>>(&mut self.storage)
-        };
-        let index = unsafe{
-            mem::transmute::<&mut Vec<usize>, &mut Vec<usize>>(&mut self.index)
-        };
-        self.index.get_mut(guid.to_usize()).and_then(move |idx|
+        if let Some(idx) = self.index.get_mut(guid.to_usize()){
             if *idx != usize::MAX {
-                let ret = storage.remove(*idx);
-                for i in index.iter_mut().filter(|i| **i > *idx && **i < usize::MAX){
-                    *i -= 1;
-                }
+                let prev = unsafe{ self.storage.storage.get_unchecked_mut(*idx).take() };
+                self.storage.free.push(*idx);
                 *idx = usize::MAX;
-                Some(ret)
+                prev
             }else{
                 None
             }
-        )
+        }else{
+            None
+        }
+        // let storage = &mut self.storage;
+        // let index = unsafe{
+        //     mem::transmute::<&mut Vec<usize>, &mut Vec<usize>>(&mut self.index)
+        // };
+        // self.index.get_mut(guid.to_usize()).and_then(move |idx|
+        //     if *idx != usize::MAX {
+        //         let ret = storage.remove(*idx);
+        //         for i in index.iter_mut().filter(|i| **i > *idx && **i < usize::MAX){
+        //             *i -= 1;
+        //         }
+        //         *idx = usize::MAX;
+        //         Some(ret)
+        //     }else{
+        //         None
+        //     }
+        // )
     }
 
     pub fn insert_key_gen(&mut self, value: T) -> K{
@@ -315,52 +396,115 @@ impl<K: Key, T> KeyedDenseVec<K,T>{
     pub fn swap(&mut self, guid1: K, guid2: K){
         let i1 = self.index[guid1.to_usize()];
         let i2 = self.index[guid2.to_usize()];
-        self.storage.swap(i1, i2)
+        self.storage.storage.swap(i1, i2)
     }
 }
 
-#[cfg(feature="parallel")]
+pub struct Values<'a, T> {
+    iter: slice::Iter<'a, Option<T>>
+}
+
+impl<'a, T> Iterator for Values<'a, T> {
+    type Item = &'a T;
+    fn next(&mut self) -> Option<&'a T> {
+        let mut next = self.iter.next()?.as_ref();
+        while next.is_none() {
+            next = self.iter.next()?.as_ref();
+        }
+        next
+    }
+}
+
+pub struct ValuesMut<'a, T> {
+    iter: slice::IterMut<'a, Option<T>>
+}
+
+impl<'a, T> Iterator for ValuesMut<'a, T> {
+    type Item = &'a mut T;
+    fn next(&mut self) -> Option<&'a mut T> {
+        let mut next = None;
+        while next.is_none() {
+            next = self.iter.next()?.as_mut();
+        }
+        next
+    }
+}
+
+pub struct ParValues<'a, T: Sync>{
+    iter: rayon::slice::Iter<'a, Option<T>>
+}
+
+impl<'a, T: Sync> ParallelIterator for ParValues<'a, T>{
+    type Item = &'a T;
+
+    fn drive_unindexed<C>(self, consumer: C) -> C::Result
+    where C: UnindexedConsumer<Self::Item>
+    {
+        self.iter.filter_map(|t| t.as_ref()).drive_unindexed(consumer)
+    }
+}
+
+#[cfg(feature="rayon")]
 impl<K, T: Sync> KeyedDenseVec<K,T>{
-    pub fn par_values(&self) -> rayon::slice::Iter<T> {
-        self.storage.par_iter()
+    pub fn par_values(&self) -> ParValues<T> {
+        ParValues {
+            iter: self.storage.storage.par_iter()
+        }
     }
 }
 
-#[cfg(feature="parallel")]
-impl<K: Key + Send + Sync, T: Sync> KeyedDenseVec<K,T>{
-    pub fn par_iter(&self) -> impl rayon::iter::ParallelIterator<Item = (K, &T)> + '_{
-        self.index.par_iter().filter_map(move |id| {
-            if *id == usize::MAX {
-                None
-            }else{
-                Some((K::from_usize(*id), unsafe{ self.storage.get_unchecked(*id) }))
-            }
-        })
+// #[cfg(feature="rayon")]
+// impl<K: Key + Send + Sync, T: Sync> KeyedDenseVec<K,T>{
+//     pub fn par_iter(&self) -> impl rayon::iter::ParallelIterator<Item = (K, &T)> + '_{
+//         self.index.par_iter().filter_map(move |id| {
+//             if *id == usize::MAX {
+//                 None
+//             }else{
+//                 Some((K::from_usize(*id), unsafe{ self.storage.get_unchecked(*id) }))
+//             }
+//         })
+//     }
+// }
+
+
+pub struct ParValuesMut<'a, T: Send>{
+    iter: rayon::slice::IterMut<'a, Option<T>>
+}
+
+impl<'a, T: Send> ParallelIterator for ParValuesMut<'a, T>{
+    type Item = &'a mut T;
+
+    fn drive_unindexed<C>(self, consumer: C) -> C::Result
+    where C: UnindexedConsumer<Self::Item>
+    {
+        self.iter.filter_map(|t| t.as_mut()).drive_unindexed(consumer)
     }
 }
 
 
-#[cfg(feature="parallel")]
+#[cfg(feature="rayon")]
 impl<K, T: Send> KeyedDenseVec<K,T>{
-    pub fn par_values_mut(&mut self) -> rayon::slice::IterMut<T> {
-        self.storage.par_iter_mut()
+    pub fn par_values_mut(&mut self) -> ParValuesMut<T> {
+        ParValuesMut {
+            iter: self.storage.storage.par_iter_mut()
+        }
     }
 }
 
-#[cfg(feature="parallel")]
-impl<K: Key + Send + Sync, T: Send + Sync> KeyedDenseVec<K,T>{
-    pub fn par_iter_mut(&mut self) -> impl rayon::iter::ParallelIterator<Item = (K, &mut T)> + '_{
-        let storage = unsafe{ mem::transmute::<&Vec<T>, &Vec<T>>(&self.storage) };
-        self.index.par_iter().filter_map(move |id| {
-            if *id == usize::MAX {
-                None
-            }else{
-                let storage = storage as *const Vec<T> as *mut Vec<T>;
-                Some((K::from_usize(*id), unsafe{ (*storage).get_unchecked_mut(*id) }))
-            }
-        })
-    }
-}
+// #[cfg(feature="rayon")]
+// impl<K: Key + Send + Sync, T: Send + Sync> KeyedDenseVec<K,T>{
+//     pub fn par_iter_mut(&mut self) -> impl rayon::iter::ParallelIterator<Item = (K, &mut T)> + '_{
+//         let storage = unsafe{ mem::transmute::<&Vec<T>, &Vec<T>>(&self.storage) };
+//         self.index.par_iter().filter_map(move |id| {
+//             if *id == usize::MAX {
+//                 None
+//             }else{
+//                 let storage = storage as *const Vec<T> as *mut Vec<T>;
+//                 Some((K::from_usize(*id), unsafe{ (*storage).get_unchecked_mut(*id) }))
+//             }
+//         })
+//     }
+// }
 
 use std::fmt::{self, Debug};
 impl<K: Key + Debug, T: Debug> Debug for KeyedDenseVec<K,T>{
@@ -401,11 +545,11 @@ pub struct OccupiedEntry<'a, K: 'a, T: 'a>{
 
 impl<'a, K: Key, T:'a> OccupiedEntry<'a, K, T> {
     pub fn get(&self) -> &T{
-        unsafe{ self.storage.storage.get_unchecked(self.idx) }
+        unsafe{ self.storage.storage.storage.get_unchecked(self.idx).as_ref().unwrap() }
     }
 
     pub fn get_mut(&mut self) -> &mut T{
-        unsafe{ self.storage.storage.get_unchecked_mut(self.idx) }
+        unsafe{ self.storage.storage.storage.get_unchecked_mut(self.idx).as_mut().unwrap() }
     }
 
     pub fn insert(&mut self, t: T) -> T{
@@ -421,7 +565,7 @@ impl<'a, K: Key, T:'a> OccupiedEntry<'a, K, T> {
     }
 
     pub fn into_mut(self) -> &'a mut T{
-        unsafe{ self.storage.storage.get_unchecked_mut(self.idx) }
+        unsafe{ self.storage.storage.storage.get_unchecked_mut(self.idx).as_mut().unwrap() }
     }
 
     pub fn remove(&mut self) -> T {
@@ -512,8 +656,8 @@ impl<K: Key,T> Iterator for IntoIter<K,T>{
                 let id = self.next;
                 self.next += 1;
                 self.len -= 1;
-                let t = mem::replace(self.storage.storage.get_unchecked_mut(id), mem::uninitialized());
-                Some((K::from_usize(id), t))
+                let t = self.storage.storage.storage.get_unchecked_mut(id).take();
+                Some((K::from_usize(id), t.unwrap()))
             }
         }
     }
@@ -600,7 +744,8 @@ impl<'a, K: Key, T: 'a> Iterator for Iter<'a, K, T>{
                 let id = self.next.clone();
                 self.next = K::from_usize(self.next.clone().to_usize() + 1);
                 self.len -= 1;
-                Some((id.clone(), self.storage.storage.get_unchecked(*self.storage.index.get_unchecked(id.to_usize()))))
+                let idx = *self.storage.index.get_unchecked(id.clone().to_usize());
+                Some((id, self.storage.storage.storage.get_unchecked(idx).as_ref().unwrap()))
             }
         }
     }
@@ -637,8 +782,9 @@ impl<'a, K: Key, T: 'a> Iterator for IterMut<'a, K, T>{
                 let id = self.next.clone();
                 self.next = K::from_usize(self.next.clone().to_usize() + 1);
                 self.len -= 1;
-                let storage = mem::transmute::<&mut Vec<T>, &mut Vec<T>>(&mut self.storage.storage);
-                Some((id.clone(), storage.get_unchecked_mut(*self.storage.index.get_unchecked(id.to_usize()))))
+                let idx = *self.storage.index.get_unchecked(id.clone().to_usize());
+                let storage: &mut Vec<Option<T>> = &mut *(&mut self.storage.storage.storage as *mut _);
+                Some((id, storage.get_unchecked_mut(idx).as_mut().unwrap()))
             }
         }
     }
@@ -668,6 +814,23 @@ impl<K: Key, T> FromIterator<(K,T)> for KeyedDenseVec<K, T>{
             dense_vec.insert(id, t);
         }
         dense_vec
+    }
+}
+
+#[cfg(feature="rayon")]
+impl<K: Key + Send, T: Send> FromParallelIterator<(K,T)> for KeyedDenseVec<K, T> {
+    fn from_par_iter<I>(par_iter: I) -> Self
+        where I: IntoParallelIterator<Item = (K,T)>
+    {
+        let par_iter = par_iter.into_par_iter();
+        // par_iter.fold(|| KeyedDenseVec::new(), |mut v, (k, t)|{
+        //     v.insert(k, t);
+        //     v
+        // }).reduce(|| KeyedDenseVec::new(), |mut v1, v2| {
+        //     v1.extend(v2);
+        //     v1
+        // })
+        par_iter.collect::<std::collections::LinkedList<_>>().into_iter().collect()
     }
 }
 
