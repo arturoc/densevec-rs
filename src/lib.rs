@@ -453,18 +453,18 @@ impl<K, T: Sync> KeyedDenseVec<K,T>{
     }
 }
 
-// #[cfg(feature="rayon")]
-// impl<K: Key + Send + Sync, T: Sync> KeyedDenseVec<K,T>{
-//     pub fn par_iter(&self) -> impl rayon::iter::ParallelIterator<Item = (K, &T)> + '_{
-//         self.index.par_iter().filter_map(move |id| {
-//             if *id == usize::MAX {
-//                 None
-//             }else{
-//                 Some((K::from_usize(*id), unsafe{ self.storage.get_unchecked(*id) }))
-//             }
-//         })
-//     }
-// }
+#[cfg(feature="rayon")]
+impl<K: Key + Send + Sync, T: Sync> KeyedDenseVec<K,T>{
+    pub fn par_iter(&self) -> impl rayon::iter::ParallelIterator<Item = (K, &T)> + '_{
+        self.index.par_iter().filter_map(move |id| {
+            if *id == usize::MAX {
+                None
+            }else{
+                Some((K::from_usize(*id), unsafe{ self.storage.storage.get_unchecked(*id).as_ref().unwrap() }))
+            }
+        })
+    }
+}
 
 
 pub struct ParValuesMut<'a, T: Send>{
@@ -491,20 +491,20 @@ impl<K, T: Send> KeyedDenseVec<K,T>{
     }
 }
 
-// #[cfg(feature="rayon")]
-// impl<K: Key + Send + Sync, T: Send + Sync> KeyedDenseVec<K,T>{
-//     pub fn par_iter_mut(&mut self) -> impl rayon::iter::ParallelIterator<Item = (K, &mut T)> + '_{
-//         let storage = unsafe{ mem::transmute::<&Vec<T>, &Vec<T>>(&self.storage) };
-//         self.index.par_iter().filter_map(move |id| {
-//             if *id == usize::MAX {
-//                 None
-//             }else{
-//                 let storage = storage as *const Vec<T> as *mut Vec<T>;
-//                 Some((K::from_usize(*id), unsafe{ (*storage).get_unchecked_mut(*id) }))
-//             }
-//         })
-//     }
-// }
+#[cfg(feature="rayon")]
+impl<K: Key + Send + Sync, T: Send + Sync> KeyedDenseVec<K,T>{
+    pub fn par_iter_mut(&mut self) -> impl rayon::iter::ParallelIterator<Item = (K, &mut T)> + '_{
+        let storage = &self.storage.storage;
+        self.index.par_iter().filter_map(move |id| {
+            if *id == usize::MAX {
+                None
+            }else{
+                let storage = unsafe{ &mut *(storage as *const Vec<Option<T>> as *mut Vec<Option<T>>) };
+                Some((K::from_usize(*id), unsafe{ storage.get_unchecked_mut(*id).as_mut().unwrap() }))
+            }
+        })
+    }
+}
 
 use std::fmt::{self, Debug};
 impl<K: Key + Debug, T: Debug> Debug for KeyedDenseVec<K,T>{
