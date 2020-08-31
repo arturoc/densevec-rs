@@ -142,6 +142,16 @@ impl<T> Storage<T> {
     pub fn reserve_exact(&mut self, additional: usize) {
         self.storage.reserve_exact(additional)
     }
+
+    // TODO: this is slow, should we just allow extra spaces when srink_to_fit is called
+    pub fn shrink_to_fit(&mut self) {
+        let mut free = mem::replace(&mut self.free, Vec::new());
+        free.sort_unstable();
+        for free in free.into_iter().rev() {
+            self.storage.remove(free);
+        }
+        self.storage.shrink_to_fit()
+    }
 }
 
 pub struct KeyedDenseVec<K,T>{
@@ -232,7 +242,7 @@ impl<K: Key, T> KeyedDenseVec<K,T>{
     }
 
     pub fn shrink_to_fit(&mut self){
-        self.storage.storage.shrink_to_fit();
+        self.storage.shrink_to_fit();
         self.index.shrink_to_fit();
     }
 
