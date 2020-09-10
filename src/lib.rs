@@ -87,8 +87,9 @@ impl Key for u8{
 pub type DenseVec<T> = KeyedDenseVec<usize, T>;
 
 pub struct KeyedDenseVec<K,T>{
-    storage: Vec<(usize, T)>,
-    index: Vec<usize>,
+    storage: Vec<T>,
+    packed: Vec<usize>,
+    sparse: Vec<usize>,
     marker: PhantomData<K>,
 }
 
@@ -100,7 +101,8 @@ impl<K,T: Serialize> serde::Serialize for KeyedDenseVec<K,T>{
     {
         let mut state = serializer.serialize_struct("KeyedDenseVec", 2)?;
         state.serialize_field("storage", &self.storage)?;
-        state.serialize_field("index", &self.index)?;
+        state.serialize_field("packed", &self.packed)?;
+        state.serialize_field("sparse", &self.sparse)?;
         state.end()
     }
 }
@@ -115,14 +117,16 @@ impl<'de, K, T: Deserialize<'de>> Deserialize<'de> for KeyedDenseVec<K,T> {
             #[derive(Deserialize)]
             pub struct KeyedDenseVec<T>{
                 pub storage: Vec<T>,
-                pub index: Vec<usize>,
+                pub packed: Vec<usize>,
+                pub sparse: Vec<usize>,
             }
         }
 
         let densevec = deserializer::KeyedDenseVec::deserialize(deserializer)?;
         Ok(KeyedDenseVec{
             storage: densevec.storage,
-            index: densevec.index,
+            packed: packed.sparse,
+            sparse: densevec.sparse,
             marker: PhantomData
         })
     }
@@ -132,7 +136,8 @@ impl<K, T: Clone> Clone for KeyedDenseVec<K,T>{
     fn clone(&self) -> KeyedDenseVec<K,T>{
         KeyedDenseVec{
             storage: self.storage.clone(),
-            index: self.index.clone(),
+            packed: self.packed.clone(),
+            sparse: self.sparse.clone(),
             marker: PhantomData
         }
     }
@@ -142,7 +147,8 @@ impl<K: Key, T> KeyedDenseVec<K,T>{
     pub fn new() -> KeyedDenseVec<K,T>{
         KeyedDenseVec{
             storage: Vec::new(),
-            index: Vec::new(),
+            packed: Vec::new(),
+            sparse: Vec::new(),
             marker: PhantomData,
         }
     }
@@ -150,7 +156,8 @@ impl<K: Key, T> KeyedDenseVec<K,T>{
     pub fn with_capacity(capacity: usize) -> Self{
         KeyedDenseVec{
             storage: Vec::with_capacity(capacity),
-            index: Vec::with_capacity(capacity),
+            packed: Vec::with_capacity(capacity),
+            sparse: Vec::with_capacity(capacity),
             marker: PhantomData,
         }
     }
@@ -160,28 +167,31 @@ impl<K: Key, T> KeyedDenseVec<K,T>{
     }
 
     fn keys_capacity(&self) -> usize {
-        self.index.capacity()
+        self.sparse.capacity()
     }
 
     pub fn reserve(&mut self, additional: usize){
         self.storage.reserve(additional);
-        self.index.reserve(additional);
+        self.packed.reserve(additional);
+        self.sparse.reserve(additional);
     }
 
     pub fn reserve_exact(&mut self, additional: usize){
         self.storage.reserve_exact(additional);
-        self.index.reserve_exact(additional);
+        self.packed.reserve_exact(additional);
+        self.sparse.reserve_exact(additional);
     }
 
     pub fn shrink_to_fit(&mut self){
         self.storage.shrink_to_fit();
-        self.index.shrink_to_fit();
+        self.packed.shrink_to_fit();
+        self.sparse.shrink_to_fit();
     }
 
     pub fn keys(&self) -> Keys<K> {
         Keys{
             next: 0,
-            indices: &self.index,
+            indices: &self.sparse,
             len: self.len(),
             marker: PhantomData,
         }
@@ -212,10 +222,10 @@ impl<K: Key, T> KeyedDenseVec<K,T>{
     }
 
     pub fn entry(&mut self, guid: K) -> Entry<K,T>{
-        if guid.clone().to_usize() >= self.index.len() {
+        if guid.clone().to_usize() >= self.sparse.len() {
             Entry::Vacant(VacantEntry{storage: self, guid: guid.clone()})
         }else{
-            let idx = unsafe{ *self.index.get_unchecked(guid.clone().to_usize()) };
+            let idx = unsafe{ *self.sparse.get_unchecked(guid.clone().to_usize()) };
             if idx == usize::MAX {
                 Entry::Vacant(VacantEntry{storage: self, guid})
             }else{
@@ -238,14 +248,14 @@ impl<K: Key, T> KeyedDenseVec<K,T>{
 
     pub fn clear(&mut self){
         self.storage.clear();
-        self.index.clear();
+        self.sparse.clear();
     }
 
     pub fn get(&self, guid: K) -> Option<&T>{
         let storage = &self.storage;
-        self.index.get(guid.to_usize()).and_then(move |idx| {
+        self.sparse.get(guid.to_usize()).and_then(move |idx| {
             if *idx != usize::MAX {
-                Some(unsafe{ &storage.get_unchecked(*idx).1 })
+                Some(unsafe{ storage.get_unchecked(*idx) })
             }else{
                 None
             }
@@ -254,9 +264,9 @@ impl<K: Key, T> KeyedDenseVec<K,T>{
 
     pub fn get_mut(&mut self, guid: K) -> Option<&mut T>{
         let storage = &mut self.storage;
-        self.index.get(guid.to_usize()).and_then(move |idx|
+        self.sparse.get(guid.to_usize()).and_then(move |idx|
             if *idx != usize::MAX {
-                Some(&mut unsafe{ storage.get_unchecked_mut(*idx) }.1)
+                Some(unsafe{ storage.get_unchecked_mut(*idx) } )
             }else{
                 None
             }
@@ -264,53 +274,61 @@ impl<K: Key, T> KeyedDenseVec<K,T>{
     }
 
     pub unsafe fn get_unchecked(&self, guid: K) -> &T{
-        let idx = *self.index.get_unchecked(guid.to_usize());
-        &self.storage.get_unchecked(idx).1
+        let idx = *self.sparse.get_unchecked(guid.to_usize());
+        self.storage.get_unchecked(idx)
     }
 
     pub unsafe fn get_unchecked_mut(&mut self, guid: K) -> &mut T{
-        let idx = *self.index.get_unchecked(guid.to_usize());
-        &mut self.storage.get_unchecked_mut(idx).1
+        let idx = *self.sparse.get_unchecked(guid.to_usize());
+        self.storage.get_unchecked_mut(idx)
     }
 
     pub fn contains_key(&self, guid: K) -> bool{
-        guid.clone().to_usize() < self.index.len() && unsafe{ *self.index.get_unchecked(guid.to_usize()) } < usize::MAX
+        let guid = guid.to_usize();
+        guid < self.sparse.len() && unsafe{ *self.sparse.get_unchecked(guid) } < usize::MAX
     }
 
     pub fn insert(&mut self, guid: K, t: T) -> Option<T> {
         let guid = guid.to_usize();
-        if self.index.len() < guid + 1 {
+        if self.sparse.len() < guid + 1 {
             let id = self.storage.len();
-            self.storage.push((guid, t));
-            self.index.resize(guid + 1, usize::MAX);
-            unsafe{ ptr::write(self.index.get_unchecked_mut(guid), id) };
+            self.storage.push(t);
+            self.packed.push(guid);
+            self.sparse.resize(guid + 1, usize::MAX);
+            unsafe{ ptr::write(self.sparse.get_unchecked_mut(guid), id) };
             None
         }else{
-            let current_idx = unsafe{ self.index.get_unchecked_mut(guid) };
+            let current_idx = unsafe{ self.sparse.get_unchecked_mut(guid) };
             if *current_idx == usize::MAX {
                 let id = self.storage.len();
-                self.storage.push((guid, t));
+                self.storage.push(t);
+                self.packed.push(guid);
                 unsafe{ ptr::write(current_idx, id) };
                 None
             } else {
+                // unsafe{ ptr::write(
+                //     self.packed.get_unchecked_mut(*current_idx),
+                //     guid
+                // ) };
                 Some(mem::replace(
                     unsafe{ self.storage.get_unchecked_mut(*current_idx) },
-                    (guid, t)
-                ).1)
+                    t
+                ))
             }
         }
     }
 
     pub fn remove(&mut self, guid: K) -> Option<T> {
         let guid = guid.to_usize();
-        if let Some(idx) = self.index.get_mut(guid){
+        if let Some(idx) = self.sparse.get_mut(guid){
             if *idx != usize::MAX {
-                let back = self.storage.last().unwrap().0;
                 let idx = mem::replace(idx, usize::MAX);
+                let back = *self.packed.last().unwrap();
                 if back != guid {
-                    unsafe{ *self.index.get_unchecked_mut(back) = idx };
+                    unsafe{ *self.sparse.get_unchecked_mut(back) = idx };
                 }
-                Some(self.storage.swap_remove(idx).1)
+                self.packed.swap_remove(idx);
+                Some(self.storage.swap_remove(idx))
             }else{
                 None
             }
@@ -319,44 +337,44 @@ impl<K: Key, T> KeyedDenseVec<K,T>{
         }
     }
 
-    pub fn insert_key_gen(&mut self, value: T) -> K{
-        let key = K::from_usize(self.index.len());
+    pub fn insert_key_gen(&mut self, value: T) -> K {
+        let key = K::from_usize(self.sparse.len());
         let ret = self.insert(key.clone(), value);
         debug_assert!(ret.is_none());
         key
     }
 
     pub fn swap(&mut self, guid1: K, guid2: K){
-        let i1 = self.index[guid1.to_usize()];
-        let i2 = self.index[guid2.to_usize()];
+        let i1 = self.sparse[guid1.to_usize()];
+        let i2 = self.sparse[guid2.to_usize()];
         self.storage.swap(i1, i2)
     }
 }
 
 pub struct Values<'a, T> {
-    iter: slice::Iter<'a, (usize, T)>
+    iter: slice::Iter<'a, T>
 }
 
 impl<'a, T> Iterator for Values<'a, T> {
     type Item = &'a T;
     fn next(&mut self) -> Option<&'a T> {
-        self.iter.next().map(|(k,v)| v)
+        self.iter.next()
     }
 }
 
 pub struct ValuesMut<'a, T> {
-    iter: slice::IterMut<'a, (usize, T)>
+    iter: slice::IterMut<'a, T>
 }
 
 impl<'a, T> Iterator for ValuesMut<'a, T> {
     type Item = &'a mut T;
     fn next(&mut self) -> Option<&'a mut T> {
-        self.iter.next().map(|(k,v)| v)
+        self.iter.next()
     }
 }
 
 pub struct ParValues<'a, T: Sync>{
-    iter: rayon::slice::Iter<'a, (usize, T)>
+    iter: rayon::slice::Iter<'a, T>
 }
 
 impl<'a, T: Sync> ParallelIterator for ParValues<'a, T>{
@@ -365,7 +383,7 @@ impl<'a, T: Sync> ParallelIterator for ParValues<'a, T>{
     fn drive_unindexed<C>(self, consumer: C) -> C::Result
     where C: UnindexedConsumer<Self::Item>
     {
-        self.iter.map(|(k,t)| t).drive_unindexed(consumer)
+        self.iter.drive_unindexed(consumer)
     }
 }
 
@@ -381,11 +399,11 @@ impl<K, T: Sync> KeyedDenseVec<K,T>{
 #[cfg(feature="rayon")]
 impl<K: Key + Send + Sync, T: Sync> KeyedDenseVec<K,T>{
     pub fn par_iter(&self) -> impl rayon::iter::ParallelIterator<Item = (K, &T)> + '_{
-        self.index.par_iter().filter_map(move |id| {
+        self.sparse.par_iter().filter_map(move |id| {
             if *id == usize::MAX {
                 None
             }else{
-                Some((K::from_usize(*id), unsafe{ &self.storage.get_unchecked(*id).1 }))
+                Some((K::from_usize(*id), unsafe{ self.storage.get_unchecked(*id) }))
             }
         })
     }
@@ -393,7 +411,7 @@ impl<K: Key + Send + Sync, T: Sync> KeyedDenseVec<K,T>{
 
 
 pub struct ParValuesMut<'a, T: Send>{
-    iter: rayon::slice::IterMut<'a, (usize,T)>
+    iter: rayon::slice::IterMut<'a, T>
 }
 
 impl<'a, T: Send> ParallelIterator for ParValuesMut<'a, T>{
@@ -402,7 +420,7 @@ impl<'a, T: Send> ParallelIterator for ParValuesMut<'a, T>{
     fn drive_unindexed<C>(self, consumer: C) -> C::Result
     where C: UnindexedConsumer<Self::Item>
     {
-        self.iter.map(|(k,t)| t).drive_unindexed(consumer)
+        self.iter.drive_unindexed(consumer)
     }
 }
 
@@ -420,12 +438,12 @@ impl<K, T: Send> KeyedDenseVec<K,T>{
 impl<K: Key + Send + Sync, T: Send + Sync> KeyedDenseVec<K,T>{
     pub fn par_iter_mut(&mut self) -> impl rayon::iter::ParallelIterator<Item = (K, &mut T)> + '_{
         let storage = &self.storage;
-        self.index.par_iter().filter_map(move |id| {
+        self.sparse.par_iter().filter_map(move |id| {
             if *id == usize::MAX {
                 None
             }else{
-                let storage = unsafe{ &mut *(storage as *const Vec<(usize,T)> as *mut Vec<(usize,T)>) };
-                Some((K::from_usize(*id), unsafe{ &mut storage.get_unchecked_mut(*id).1 }))
+                let storage = unsafe{ &mut *(storage as *const Vec<T> as *mut Vec<T>) };
+                Some((K::from_usize(*id), unsafe{ storage.get_unchecked_mut(*id) }))
             }
         })
     }
@@ -470,11 +488,11 @@ pub struct OccupiedEntry<'a, K: 'a, T: 'a>{
 
 impl<'a, K: Key, T:'a> OccupiedEntry<'a, K, T> {
     pub fn get(&self) -> &T{
-        unsafe{ &self.storage.storage.get_unchecked(self.idx).1 }
+        unsafe{ self.storage.storage.get_unchecked(self.idx) }
     }
 
     pub fn get_mut(&mut self) -> &mut T{
-        unsafe{ &mut self.storage.storage.get_unchecked_mut(self.idx).1 }
+        unsafe{ self.storage.storage.get_unchecked_mut(self.idx) }
     }
 
     pub fn insert(&mut self, t: T) -> T{
@@ -490,7 +508,7 @@ impl<'a, K: Key, T:'a> OccupiedEntry<'a, K, T> {
     }
 
     pub fn into_mut(self) -> &'a mut T{
-        unsafe{ &mut self.storage.storage.get_unchecked_mut(self.idx).1 }
+        unsafe{ self.storage.storage.get_unchecked_mut(self.idx) }
     }
 
     pub fn remove(&mut self) -> T {
@@ -572,10 +590,10 @@ impl<K: Key,T> Iterator for IntoIter<K,T>{
     type Item = (K, T);
     fn next(&mut self) -> Option<(K, T)> {
         unsafe {
-            while self.next < self.storage.index.len()  && *self.storage.index.get_unchecked(self.next) == usize::MAX {
+            while self.next < self.storage.sparse.len()  && *self.storage.sparse.get_unchecked(self.next) == usize::MAX {
                 self.next += 1;
             }
-            if self.next == self.storage.index.len() {
+            if self.next == self.storage.sparse.len() {
                 None
             }else{
                 let id = self.next;
@@ -657,19 +675,19 @@ impl<'a, K: Key, T: 'a> Iterator for Iter<'a, K, T>{
     type Item = (K, &'a T);
     fn next(&mut self) -> Option<(K, &'a T)>{
         unsafe {
-            while self.next.clone().to_usize() < self.storage.index.len()  &&
-                *self.storage.index.get_unchecked(self.next.clone().to_usize()) == usize::MAX
+            while self.next.clone().to_usize() < self.storage.sparse.len()  &&
+                *self.storage.sparse.get_unchecked(self.next.clone().to_usize()) == usize::MAX
             {
                 self.next = K::from_usize(self.next.clone().to_usize() + 1);
             }
-            if self.next.clone().to_usize() == self.storage.index.len() {
+            if self.next.clone().to_usize() == self.storage.sparse.len() {
                 None
             }else{
                 let id = self.next.clone();
                 self.next = K::from_usize(self.next.clone().to_usize() + 1);
                 self.len -= 1;
-                let idx = *self.storage.index.get_unchecked(id.clone().to_usize());
-                Some((id, &self.storage.storage.get_unchecked(idx).1))
+                let idx = *self.storage.sparse.get_unchecked(id.clone().to_usize());
+                Some((id, self.storage.storage.get_unchecked(idx)))
             }
         }
     }
@@ -696,19 +714,19 @@ impl<'a, K: Key, T: 'a> Iterator for IterMut<'a, K, T>{
     type Item = (K, &'a mut T);
     fn next(&mut self) -> Option<(K, &'a mut T)>{
         unsafe {
-            while self.next.clone().to_usize() < self.storage.index.len()  &&
-                *self.storage.index.get_unchecked(self.next.clone().to_usize()) == usize::MAX {
+            while self.next.clone().to_usize() < self.storage.sparse.len()  &&
+                *self.storage.sparse.get_unchecked(self.next.clone().to_usize()) == usize::MAX {
                 self.next = K::from_usize(self.next.clone().to_usize() + 1);
             }
-            if self.next.clone().to_usize() == self.storage.index.len() {
+            if self.next.clone().to_usize() == self.storage.sparse.len() {
                 None
             }else{
                 let id = self.next.clone();
                 self.next = K::from_usize(self.next.clone().to_usize() + 1);
                 self.len -= 1;
-                let idx = *self.storage.index.get_unchecked(id.clone().to_usize());
-                let storage: &mut Vec<(usize, T)> = &mut *(&mut self.storage.storage as *mut _);
-                Some((id, &mut storage.get_unchecked_mut(idx).1))
+                let idx = *self.storage.sparse.get_unchecked(id.clone().to_usize());
+                let storage: &mut Vec<T> = &mut *(&mut self.storage.storage as *mut _);
+                Some((id, storage.get_unchecked_mut(idx)))
             }
         }
     }
