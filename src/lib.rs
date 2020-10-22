@@ -25,7 +25,7 @@ use std::mem;
 use std::ptr;
 use std::slice;
 use std::usize;
-use std::iter::FromIterator;
+use std::iter::{Enumerate, FromIterator};
 use std::ops::{Index, IndexMut};
 use std::marker::PhantomData;
 
@@ -85,6 +85,7 @@ impl Key for u8{
 }
 
 pub type DenseVec<T> = KeyedDenseVec<usize, T>;
+pub type FastIndex = usize;
 
 pub struct KeyedDenseVec<K,T>{
     storage: Vec<T>,
@@ -221,6 +222,18 @@ impl<K: Key, T> KeyedDenseVec<K,T>{
         }
     }
 
+    pub fn fast_ids_iter(&self) -> FastIter<T>{
+        FastIter{
+            iter: self.storage.iter().enumerate()
+        }
+    }
+
+    pub fn fast_ids_iter_mut(&mut self) -> FastIterMut<T>{
+        FastIterMut{
+            iter: self.storage.iter_mut().enumerate()
+        }
+    }
+
     pub fn entry(&mut self, guid: K) -> Entry<K,T>{
         if guid.clone().to_usize() >= self.sparse.len() {
             Entry::Vacant(VacantEntry{storage: self, guid: guid.clone()})
@@ -283,6 +296,22 @@ impl<K: Key, T> KeyedDenseVec<K,T>{
         self.storage.get_unchecked_mut(idx)
     }
 
+    pub fn get_fast(&self, idx: FastIndex) -> Option<&T>{
+        self.storage.get(idx)
+    }
+
+    pub fn get_fast_mut(&mut self, idx: FastIndex) -> Option<&mut T>{
+        self.storage.get_mut(idx)
+    }
+
+    pub unsafe fn get_fast_unchecked(&self, idx: FastIndex) -> &T{
+        self.storage.get_unchecked(idx)
+    }
+
+    pub unsafe fn get_fast_unchecked_mut(&mut self, idx: FastIndex) -> &mut T{
+        self.storage.get_unchecked_mut(idx)
+    }
+
     pub fn contains_key(&self, guid: K) -> bool{
         let guid = guid.to_usize();
         guid < self.sparse.len() && unsafe{ *self.sparse.get_unchecked(guid) } < usize::MAX
@@ -318,6 +347,36 @@ impl<K: Key, T> KeyedDenseVec<K,T>{
         }
     }
 
+    pub fn insert_fast_index(&mut self, guid: K, t: T) -> (Option<T>, FastIndex){
+        let guid = guid.to_usize();
+        if self.sparse.len() < guid + 1 {
+            let id = self.storage.len();
+            self.storage.push(t);
+            self.packed.push(guid);
+            self.sparse.resize(guid + 1, usize::MAX);
+            unsafe{ ptr::write(self.sparse.get_unchecked_mut(guid), id) };
+            (None, id)
+        }else{
+            let current_idx = unsafe{ self.sparse.get_unchecked_mut(guid) };
+            if *current_idx == usize::MAX {
+                let id = self.storage.len();
+                self.storage.push(t);
+                self.packed.push(guid);
+                unsafe{ ptr::write(current_idx, id) };
+                (None, id)
+            } else {
+                // unsafe{ ptr::write(
+                //     self.packed.get_unchecked_mut(*current_idx),
+                //     guid
+                // ) };
+                (Some(mem::replace(
+                    unsafe{ self.storage.get_unchecked_mut(*current_idx) },
+                    t
+                )), *current_idx)
+            }
+        }
+    }
+
     pub fn remove(&mut self, guid: K) -> Option<T> {
         let guid = guid.to_usize();
         if let Some(idx) = self.sparse.get_mut(guid){
@@ -344,10 +403,34 @@ impl<K: Key, T> KeyedDenseVec<K,T>{
         key
     }
 
+    pub fn insert_fast_index_key_gen(&mut self, value: T) -> (K, FastIndex) {
+        let key = K::from_usize(self.sparse.len());
+        let (ret, idx) = self.insert_fast_index(key.clone(), value);
+        debug_assert!(ret.is_none());
+        (key, idx)
+    }
+
     pub fn swap(&mut self, guid1: K, guid2: K){
         let i1 = self.sparse[guid1.to_usize()];
         let i2 = self.sparse[guid2.to_usize()];
         self.storage.swap(i1, i2)
+    }
+
+    pub fn fast_index_for(&self, guid: K) -> Option<FastIndex> {
+        self.sparse.get(guid.to_usize()).copied()
+    }
+
+    pub unsafe fn fast_index_unchecked_for(&self, guid: K) -> FastIndex {
+        *self.sparse.get_unchecked(guid.to_usize())
+    }
+
+    pub fn guid_from_fast_index(&self, idx: usize) -> Option<K> {
+        self.packed.get(idx).map(|key| K::from_usize(*key))
+    }
+
+    pub unsafe fn unchecked_guid_from_fast_index(&self, idx: usize) -> K {
+        let key = self.packed.get_unchecked(idx);
+        K::from_usize(*key)
     }
 }
 
@@ -694,6 +777,30 @@ impl<'a, K: Key, T: 'a> Iterator for Iter<'a, K, T>{
 
     fn size_hint(&self) -> (usize, Option<usize>){
         (self.len, Some(self.len))
+    }
+}
+
+
+pub struct FastIter<'a, T: 'a>{
+    iter: Enumerate<slice::Iter<'a, T>>
+}
+
+impl<'a, T: 'a> Iterator for FastIter<'a, T>{
+    type Item = (usize, &'a T);
+    fn next(&mut self) -> Option<(usize, &'a T)>{
+        self.iter.next()
+    }
+}
+
+
+pub struct FastIterMut<'a, T: 'a>{
+    iter: Enumerate<slice::IterMut<'a, T>>
+}
+
+impl<'a, T: 'a> Iterator for FastIterMut<'a, T>{
+    type Item = (usize, &'a mut T);
+    fn next(&mut self) -> Option<(usize, &'a mut T)>{
+        self.iter.next()
     }
 }
 
