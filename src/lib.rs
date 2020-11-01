@@ -456,10 +456,12 @@ impl<'a, T> Iterator for ValuesMut<'a, T> {
     }
 }
 
+#[cfg(feature="rayon")]
 pub struct ParValues<'a, T: Sync>{
     iter: rayon::slice::Iter<'a, T>
 }
 
+#[cfg(feature="rayon")]
 impl<'a, T: Sync> ParallelIterator for ParValues<'a, T>{
     type Item = &'a T;
 
@@ -493,10 +495,12 @@ impl<K: Key + Send + Sync, T: Sync> KeyedDenseVec<K,T>{
 }
 
 
+#[cfg(feature="rayon")]
 pub struct ParValuesMut<'a, T: Send>{
     iter: rayon::slice::IterMut<'a, T>
 }
 
+#[cfg(feature="rayon")]
 impl<'a, T: Send> ParallelIterator for ParValuesMut<'a, T>{
     type Item = &'a mut T;
 
