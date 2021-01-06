@@ -440,8 +440,22 @@ pub struct Values<'a, T> {
 
 impl<'a, T> Iterator for Values<'a, T> {
     type Item = &'a T;
+
+    #[inline]
     fn next(&mut self) -> Option<&'a T> {
         self.iter.next()
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.iter.size_hint()
+    }
+}
+
+impl<'a, T> ExactSizeIterator for Values<'a, T> {
+    #[inline]
+    fn len(&self) -> usize {
+        self.iter.len()
     }
 }
 
@@ -453,6 +467,17 @@ impl<'a, T> Iterator for ValuesMut<'a, T> {
     type Item = &'a mut T;
     fn next(&mut self) -> Option<&'a mut T> {
         self.iter.next()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.iter.size_hint()
+    }
+}
+
+impl<'a, T> ExactSizeIterator for ValuesMut<'a, T> {
+    #[inline]
+    fn len(&self) -> usize {
+        self.iter.len()
     }
 }
 
@@ -784,6 +809,13 @@ impl<'a, K: Key, T: 'a> Iterator for Iter<'a, K, T>{
     }
 }
 
+impl<'a, K: Key, T> ExactSizeIterator for Iter<'a, K, T> {
+    #[inline]
+    fn len(&self) -> usize {
+        self.len
+    }
+}
+
 
 pub struct FastIter<'a, T: 'a>{
     iter: Enumerate<slice::Iter<'a, T>>
@@ -791,8 +823,22 @@ pub struct FastIter<'a, T: 'a>{
 
 impl<'a, T: 'a> Iterator for FastIter<'a, T>{
     type Item = (usize, &'a T);
+
+    #[inline]
     fn next(&mut self) -> Option<(usize, &'a T)>{
         self.iter.next()
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.iter.size_hint()
+    }
+}
+
+impl<'a, T> ExactSizeIterator for FastIter<'a, T> {
+    #[inline]
+    fn len(&self) -> usize {
+        self.iter.len()
     }
 }
 
@@ -803,15 +849,22 @@ pub struct FastIterMut<'a, T: 'a>{
 
 impl<'a, T: 'a> Iterator for FastIterMut<'a, T>{
     type Item = (usize, &'a mut T);
+
+    #[inline]
     fn next(&mut self) -> Option<(usize, &'a mut T)>{
         self.iter.next()
     }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.iter.size_hint()
+    }
 }
 
-
-impl<'a, K:Key, T> ExactSizeIterator for Iter<'a, K, T> {
+impl<'a, T: 'a> ExactSizeIterator for FastIterMut<'a, T>{
+    #[inline]
     fn len(&self) -> usize {
-        self.len
+        self.iter.len()
     }
 }
 
