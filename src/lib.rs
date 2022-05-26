@@ -400,6 +400,18 @@ impl<K: Key, T> KeyedDenseVec<K,T>{
         }
     }
 
+    pub unsafe fn remove_unchecked(&mut self, guid: K) -> T {
+        let guid = guid.to_usize();
+        let idx = self.sparse.get_unchecked_mut(guid);
+        let idx = mem::replace(idx, usize::MAX);
+        let back = *self.packed.last().unwrap();
+        if back != guid {
+            *self.sparse.get_unchecked_mut(back) = idx;
+        }
+        self.packed.swap_remove(idx);
+        self.storage.swap_remove(idx)
+    }
+
     pub fn insert_key_gen(&mut self, value: T) -> K {
         let key = K::from_usize(self.sparse.len());
         let ret = self.insert(key, value);
