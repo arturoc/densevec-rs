@@ -516,11 +516,11 @@ impl<K, T: Sync> KeyedDenseVec<K,T>{
 #[cfg(feature="rayon")]
 impl<K: Key + Send + Sync, T: Sync> KeyedDenseVec<K,T>{
     pub fn par_iter(&self) -> impl rayon::iter::ParallelIterator<Item = (K, &T)> + '_{
-        self.sparse.par_iter().filter_map(move |id| {
+        self.sparse.par_iter().enumerate().filter_map(move |(guid, id)| {
             if *id == usize::MAX {
                 None
             }else{
-                Some((K::from_usize(*id), unsafe{ self.storage.get_unchecked(*id) }))
+                Some((K::from_usize(guid), unsafe{ self.storage.get_unchecked(*id) }))
             }
         })
     }
@@ -557,12 +557,12 @@ impl<K, T: Send> KeyedDenseVec<K,T>{
 impl<K: Key + Send + Sync, T: Send + Sync> KeyedDenseVec<K,T>{
     pub fn par_iter_mut(&mut self) -> impl rayon::iter::ParallelIterator<Item = (K, &mut T)> + '_{
         let storage = &self.storage;
-        self.sparse.par_iter().filter_map(move |id| {
+        self.sparse.par_iter().enumerate().filter_map(move |(guid, id)| {
             if *id == usize::MAX {
                 None
             }else{
                 let storage = unsafe{ &mut *(storage as *const Vec<T> as *mut Vec<T>) };
-                Some((K::from_usize(*id), unsafe{ storage.get_unchecked_mut(*id) }))
+                Some((K::from_usize(guid), unsafe{ storage.get_unchecked_mut(*id) }))
             }
         })
     }
@@ -1662,6 +1662,17 @@ mod test_map {
         for k in keys {
             assert!(a.get(k).is_some());
         }
+    }
+
+    #[cfg(feature="rayon")]
+    #[test]
+    fn par_iter() {
+        use rayon::iter::ParallelIterator;
+
+        let xs = vec![(1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6)];
+        let map: DenseVec<_> = xs.clone().into_iter().collect();
+        let vec = map.par_iter().map(|(guid, v)| (guid, *v)).collect::<Vec<_>>();
+        assert_eq!(xs, vec)
     }
 
     // #[test]
