@@ -35,50 +35,60 @@ pub trait Key: Copy + PartialEq{
 }
 
 impl Key for usize{
+    #[inline(always)]
     fn to_usize(self) -> usize{
         self
     }
 
+    #[inline(always)]
     fn from_usize(k: usize) -> Self{
         k
     }
 }
 
 impl Key for u64{
+    #[inline(always)]
     fn to_usize(self) -> usize{
         self as usize
     }
 
+    #[inline(always)]
     fn from_usize(k: usize) -> Self{
         k as u64
     }
 }
 
 impl Key for u32{
+    #[inline(always)]
     fn to_usize(self) -> usize{
         self as usize
     }
 
+    #[inline(always)]
     fn from_usize(k: usize) -> Self{
         k as u32
     }
 }
 
 impl Key for u16{
+    #[inline(always)]
     fn to_usize(self) -> usize{
         self as usize
     }
 
+    #[inline(always)]
     fn from_usize(k: usize) -> Self{
         k as u16
     }
 }
 
 impl Key for u8{
+    #[inline(always)]
     fn to_usize(self) -> usize{
         self as usize
     }
 
+    #[inline(always)]
     fn from_usize(k: usize) -> Self{
         k as u8
     }
