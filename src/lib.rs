@@ -195,11 +195,21 @@ impl<K: Key, T> KeyedDenseVec<K,T>{
         self.sparse.shrink_to_fit();
     }
 
+    pub fn keys_unordered(&self) -> KeysUnordered<K> {
+        let packed_range = self.packed.as_ptr_range();
+        KeysUnordered{
+            ptr: packed_range.start,
+            end: packed_range.end,
+            marker: PhantomData,
+        }
+    }
+
     pub fn keys(&self) -> Keys<K> {
+        let range = self.sparse.as_ptr_range();
         Keys{
+            ptr: range.start,
+            end: range.end,
             next: 0,
-            indices: &self.sparse,
-            len: self.len(),
             marker: PhantomData,
         }
     }
@@ -212,19 +222,47 @@ impl<K: Key, T> KeyedDenseVec<K,T>{
         ValuesMut{ iter: self.storage.iter_mut() }
     }
 
+    pub fn iter_unordered(&self) -> IterUnordered<K,T>{
+        let range_guid = self.packed.as_ptr_range();
+        let ptr_value = self.storage.as_ptr();
+        IterUnordered {
+            ptr_guid: range_guid.start,
+            end_guid: range_guid.end,
+            ptr_value,
+            marker: PhantomData
+        }
+    }
+
     pub fn iter(&self) -> Iter<K,T>{
-        Iter{
-            next: K::from_usize(0),
-            storage: self,
-            len: self.len(),
+        let range_guid = self.sparse.as_ptr_range();
+        Iter {
+            ptr: range_guid.start,
+            end: range_guid.end,
+            next: 0,
+            storage: &self.storage,
+            marker: PhantomData
+        }
+    }
+
+    pub fn iter_unordered_mut(&mut self) -> IterUnorderedMut<K,T>{
+        let range_guid = self.packed.as_ptr_range();
+        let ptr_value = self.storage.as_mut_ptr();
+        IterUnorderedMut {
+            ptr_guid: range_guid.start,
+            end_guid: range_guid.end,
+            ptr_value,
+            marker: PhantomData
         }
     }
 
     pub fn iter_mut(&mut self) -> IterMut<K,T>{
-        IterMut{
-            next: K::from_usize(0),
-            len: self.len(),
-            storage: self,
+        let range_guid = self.sparse.as_ptr_range();
+        IterMut {
+            ptr: range_guid.start,
+            end: range_guid.end,
+            next: 0,
+            storage: &mut self.storage,
+            marker: PhantomData
         }
     }
 
@@ -696,16 +734,19 @@ impl<'a, K: Key, T: 'a> Entry<'a, K, T>{
 pub struct IntoIter<K, T> {
     storage: KeyedDenseVec<K, T>,
     next: usize,
-    len: usize,
+    ptr: *mut usize,
+    end: *mut usize,
 }
 
 impl<K:Key,T> IntoIterator for KeyedDenseVec<K, T>{
     type Item = (K, T);
     type IntoIter = IntoIter<K,T>;
-    fn into_iter(self) -> Self::IntoIter{
-        IntoIter{
+    fn into_iter(mut self) -> Self::IntoIter{
+        let range_guid = self.sparse.as_mut_ptr_range();
+        IntoIter {
+            ptr: range_guid.start,
+            end: range_guid.end,
             next: 0,
-            len: self.len(),
             storage: self
         }
     }
@@ -721,117 +762,112 @@ impl<K: Key,T> Iterator for IntoIter<K,T>{
     type Item = (K, T);
     fn next(&mut self) -> Option<(K, T)> {
         unsafe {
-            while self.next < self.storage.sparse.len()  && *self.storage.sparse.get_unchecked(self.next) == usize::MAX {
-                self.next += 1;
+            while self.ptr < self.end {
+                if *self.ptr != usize::MAX {
+                    let guid = self.next;
+                    let idx = mem::replace(&mut *self.ptr, usize::MAX);
+                    let back = *self.storage.packed.last().unwrap();
+                    if back != guid {
+                        *self.storage.sparse.get_unchecked_mut(back) = idx;
+                    }
+                    self.storage.packed.swap_remove(idx);
+                    self.ptr = self.ptr.add(1);
+                    self.next += 1;
+                    let guid = K::from_usize(guid);
+                    return Some((guid, self.storage.storage.swap_remove(idx)))
+                }else{
+                    self.ptr = self.ptr.add(1);
+                    self.next += 1;
+                }
             }
-            if self.next == self.storage.sparse.len() {
-                None
-            }else{
-                let id = self.next;
-                self.next += 1;
-                self.len -= 1;
-                Some((K::from_usize(id), self.storage.remove(K::from_usize(id)).unwrap()))
-            }
+            None
         }
     }
 
     fn size_hint(&self) -> (usize, Option<usize>){
-        (self.len, Some(self.len))
+        let len = self.len();
+        (len, Some(len))
     }
 }
 
 impl<K:Key,T> ExactSizeIterator for IntoIter<K,T> {
     fn len(&self) -> usize {
-        self.len
+        unsafe{ self.end.offset_from(self.ptr) as usize }
     }
 }
 
+#[derive(Clone)]
+pub struct KeysUnordered<'a, K>{
+    ptr: *const usize,
+    end: *const usize,
+    marker: PhantomData<&'a K>,
+}
+
+impl<'a, K: Key> Iterator for KeysUnordered<'a, K>{
+    type Item = K;
+
+    fn next(&mut self) -> Option<K>{
+        if self.ptr == self.end {
+            return None
+        }else{
+            unsafe {
+                let next = *self.ptr;
+                self.ptr = self.ptr.add(1);
+                Some(K::from_usize(next))
+            }
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>){
+        let len = self.len();
+        (len, Some(len))
+    }
+}
+
+impl<'a, K: Key> ExactSizeIterator for KeysUnordered<'a, K> {
+    #[inline]
+    fn len(&self) -> usize {
+        unsafe{ self.end.offset_from(self.ptr) as usize }
+    }
+}
+
+#[derive(Clone)]
 pub struct Keys<'a, K>{
+    ptr: *const usize,
+    end: *const usize,
     next: usize,
-    len: usize,
-    indices: &'a [usize],
-    marker: PhantomData<K>,
+    marker: PhantomData<&'a K>,
 }
 
 impl<'a, K: Key> Iterator for Keys<'a, K>{
     type Item = K;
     fn next(&mut self) -> Option<K>{
         unsafe {
-            while self.next < self.indices.len() && *self.indices.get_unchecked(self.next) == usize::MAX {
-                self.next += 1;
-            }
-            if self.next == self.indices.len() {
-                None
-            }else{
-                let id = self.next;
-                self.next += 1;
-                self.len -= 1;
-                Some(K::from_usize(id))
+            while self.ptr < self.end {
+                if *self.ptr != usize::MAX {
+                    let next = self.next;
+                    self.ptr = self.ptr.add(1);
+                    self.next += 1;
+                    return Some(K::from_usize(next))
+                }else{
+                    self.ptr = self.ptr.add(1);
+                    self.next += 1;
+                }
             }
         }
+        None
     }
 
     fn size_hint(&self) -> (usize, Option<usize>){
-        (self.len, Some(self.len))
-    }
-}
-
-
-impl<K:Key> Clone for Keys<'_, K>{
-    #[inline]
-    fn clone(&self) -> Self{
-        Keys{
-            next: self.next,
-            len: self.len,
-            indices: self.indices,
-            marker: PhantomData
-        }
+        let len = self.len();
+        (len, Some(len))
     }
 }
 
 impl<'a, K: Key> ExactSizeIterator for Keys<'a, K> {
-    fn len(&self) -> usize {
-        self.len
-    }
-}
-
-
-pub struct Iter<'a, K: 'a, T: 'a>{
-    storage: &'a KeyedDenseVec<K,T>,
-    next: K,
-    len: usize,
-}
-
-impl<'a, K: Key, T: 'a> Iterator for Iter<'a, K, T>{
-    type Item = (K, &'a T);
-    fn next(&mut self) -> Option<(K, &'a T)>{
-        unsafe {
-            while self.next.clone().to_usize() < self.storage.sparse.len()  &&
-                *self.storage.sparse.get_unchecked(self.next.clone().to_usize()) == usize::MAX
-            {
-                self.next = K::from_usize(self.next.clone().to_usize() + 1);
-            }
-            if self.next.clone().to_usize() == self.storage.sparse.len() {
-                None
-            }else{
-                let id = self.next.clone();
-                self.next = K::from_usize(self.next.clone().to_usize() + 1);
-                self.len -= 1;
-                let idx = *self.storage.sparse.get_unchecked(id.clone().to_usize());
-                Some((id, self.storage.storage.get_unchecked(idx)))
-            }
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>){
-        (self.len, Some(self.len))
-    }
-}
-
-impl<'a, K: Key, T> ExactSizeIterator for Iter<'a, K, T> {
     #[inline]
     fn len(&self) -> usize {
-        self.len
+        unsafe{ self.end.offset_from(self.ptr) as usize }
     }
 }
 
@@ -887,41 +923,160 @@ impl<'a, T: 'a> ExactSizeIterator for FastIterMut<'a, T>{
     }
 }
 
+#[derive(Clone)]
+pub struct IterUnordered<'a, K: 'a, T: 'a>{
+    ptr_guid: *const usize,
+    end_guid: *const usize,
+    ptr_value: *const T,
+    marker: PhantomData<&'a K>
+}
+
+impl<'a, K: Key, T: 'a> Iterator for IterUnordered<'a, K, T>{
+    type Item = (K, &'a T);
+    fn next(&mut self) -> Option<(K, &'a T)>{
+        unsafe {
+            if self.ptr_guid < self.end_guid {
+                let guid = *self.ptr_guid;
+                let value = &*self.ptr_value;
+                self.ptr_guid = self.ptr_guid.add(1);
+                self.ptr_value = self.ptr_value.add(1);
+                Some((K::from_usize(guid), value))
+            }else{
+                None
+            }
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>){
+        let len = self.len();
+        (len, Some(len))
+    }
+}
+
+impl<'a, K: Key, T> ExactSizeIterator for IterUnordered<'a, K, T> {
+    #[inline]
+    fn len(&self) -> usize {
+        unsafe{ self.end_guid.offset_from(self.ptr_guid) as usize }
+    }
+}
+
+pub struct IterUnorderedMut<'a, K: 'a, T: 'a>{
+    ptr_guid: *const usize,
+    end_guid: *const usize,
+    ptr_value: *mut T,
+    marker: PhantomData<&'a K>
+}
+
+impl<'a, K: Key, T: 'a> Iterator for IterUnorderedMut<'a, K, T>{
+    type Item = (K, &'a mut T);
+    fn next(&mut self) -> Option<(K, &'a mut T)>{
+        unsafe {
+            if self.ptr_guid < self.end_guid {
+                let guid = *self.ptr_guid;
+                let value = &mut *self.ptr_value;
+                self.ptr_guid = self.ptr_guid.add(1);
+                self.ptr_value = self.ptr_value.add(1);
+                Some((K::from_usize(guid), value))
+            }else{
+                None
+            }
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>){
+        let len = self.len();
+        (len, Some(len))
+    }
+}
+
+impl<'a, K:Key, T> ExactSizeIterator for IterUnorderedMut<'a, K, T> {
+    #[inline]
+    fn len(&self) -> usize {
+        unsafe{ self.end_guid.offset_from(self.ptr_guid) as usize }
+    }
+}
+
+#[derive(Clone)]
+pub struct Iter<'a, K: 'a, T: 'a>{
+    next: usize,
+    ptr: *const usize,
+    end: *const usize,
+    storage: &'a [T],
+    marker: PhantomData<K>
+}
+
+impl<'a, K: Key, T: 'a> Iterator for Iter<'a, K, T>{
+    type Item = (K, &'a T);
+    fn next(&mut self) -> Option<(K, &'a T)>{
+        unsafe {
+            while self.ptr < self.end {
+                if *self.ptr != usize::MAX {
+                    let id = self.next;
+                    let idx = *self.ptr;
+                    self.ptr = self.ptr.add(1);
+                    self.next += 1;
+                    return Some((K::from_usize(id), self.storage.get_unchecked(idx)))
+                }else{
+                    self.ptr = self.ptr.add(1);
+                    self.next += 1;
+                }
+            }
+            None
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>){
+        let len = self.len();
+        (len, Some(len))
+    }
+}
+
+impl<'a, K:Key, T> ExactSizeIterator for Iter<'a, K, T> {
+    #[inline]
+    fn len(&self) -> usize {
+        unsafe{ self.end.offset_from(self.ptr) as usize }
+    }
+}
+
 pub struct IterMut<'a, K: 'a, T: 'a>{
-    storage: &'a mut KeyedDenseVec<K, T>,
-    next: K,
-    len: usize,
+    next: usize,
+    ptr: *const usize,
+    end: *const usize,
+    storage: &'a mut [T],
+    marker: PhantomData<K>
 }
 
 impl<'a, K: Key, T: 'a> Iterator for IterMut<'a, K, T>{
     type Item = (K, &'a mut T);
     fn next(&mut self) -> Option<(K, &'a mut T)>{
         unsafe {
-            while self.next.clone().to_usize() < self.storage.sparse.len()  &&
-                *self.storage.sparse.get_unchecked(self.next.clone().to_usize()) == usize::MAX {
-                self.next = K::from_usize(self.next.clone().to_usize() + 1);
+            while self.ptr < self.end {
+                if *self.ptr != usize::MAX {
+                    let id = self.next;
+                    let idx = *self.ptr;
+                    self.ptr = self.ptr.add(1);
+                    self.next += 1;
+                    let storage: &mut [T] = &mut *(self.storage as *mut _);
+                    return Some((K::from_usize(id), storage.get_unchecked_mut(idx)))
+                }else{
+                    self.ptr = self.ptr.add(1);
+                    self.next += 1;
+                }
             }
-            if self.next.clone().to_usize() == self.storage.sparse.len() {
-                None
-            }else{
-                let id = self.next.clone();
-                self.next = K::from_usize(self.next.clone().to_usize() + 1);
-                self.len -= 1;
-                let idx = *self.storage.sparse.get_unchecked(id.clone().to_usize());
-                let storage: &mut Vec<T> = &mut *(&mut self.storage.storage as *mut _);
-                Some((id, storage.get_unchecked_mut(idx)))
-            }
+            None
         }
     }
 
     fn size_hint(&self) -> (usize, Option<usize>){
-        (self.len, Some(self.len))
+        let len = self.len();
+        (len, Some(len))
     }
 }
 
 impl<'a, K:Key, T> ExactSizeIterator for IterMut<'a, K, T> {
+    #[inline]
     fn len(&self) -> usize {
-        self.len
+        unsafe{ self.end.offset_from(self.ptr) as usize }
     }
 }
 
@@ -1316,6 +1471,14 @@ mod test_map {
     }
 
     #[test]
+    fn test_into_iter() {
+        let vec = vec![(1, 'a'), (2, 'b'), (3, 'c'), (5, 'e')];
+        let map: DenseVec<_> = vec.clone().into_iter().collect();
+        let vec2: Vec<_> = map.into_iter().collect();
+        assert_eq!(vec, vec2);
+    }
+
+    #[test]
     fn test_find() {
         let mut m = DenseVec::new();
         assert!(m.get(1).is_none());
@@ -1654,7 +1817,7 @@ mod test_map {
         let value = "value goes here";
 
         assert!(a.is_empty());
-        match a.entry(key.clone()) {
+        match a.entry(key) {
             Occupied(_) => panic!(),
             Vacant(mut e) => {
                 assert_eq!(key, e.key());
@@ -1669,7 +1832,7 @@ mod test_map {
     fn test_key_gen() {
         let mut a = DenseVec::new();
         let keys = (0..1000)
-            .map(|i| a.insert_key_gen(0))
+            .map(|_| a.insert_key_gen(0))
             .collect::<Vec<_>>();
         for k in keys {
             assert!(a.get(k).is_some());
