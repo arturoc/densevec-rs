@@ -177,10 +177,6 @@ impl<K: Key, T> KeyedDenseVec<K,T>{
         self.storage.capacity()
     }
 
-    fn keys_capacity(&self) -> usize {
-        self.sparse.capacity()
-    }
-
     pub fn reserve(&mut self, additional: usize){
         self.storage.reserve(additional);
         self.packed.reserve(additional);
