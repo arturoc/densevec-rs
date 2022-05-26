@@ -386,18 +386,15 @@ impl<K: Key, T> KeyedDenseVec<K,T>{
 
     pub fn remove(&mut self, guid: K) -> Option<T> {
         let guid = guid.to_usize();
-        if let Some(idx) = self.sparse.get_mut(guid){
-            if *idx != usize::MAX {
-                let idx = mem::replace(idx, usize::MAX);
-                let back = *self.packed.last().unwrap();
-                if back != guid {
-                    unsafe{ *self.sparse.get_unchecked_mut(back) = idx };
-                }
-                self.packed.swap_remove(idx);
-                Some(self.storage.swap_remove(idx))
-            }else{
-                None
+        let idx = self.sparse.get_mut(guid)?;
+        if *idx != usize::MAX {
+            let idx = mem::replace(idx, usize::MAX);
+            let back = *self.packed.last().unwrap();
+            if back != guid {
+                unsafe{ *self.sparse.get_unchecked_mut(back) = idx };
             }
+            self.packed.swap_remove(idx);
+            Some(self.storage.swap_remove(idx))
         }else{
             None
         }
