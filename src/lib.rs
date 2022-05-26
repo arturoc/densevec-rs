@@ -592,7 +592,10 @@ impl<K: Key + Debug, T: Debug> Debug for KeyedDenseVec<K,T>{
 
 impl<K: Key, T: PartialEq> PartialEq for KeyedDenseVec<K,T>{
     fn eq(&self, other: &KeyedDenseVec<K,T>) -> bool{
-        self.len() == other.len() && self.iter().zip(other.iter()).all(|((k1,v1), (k2,v2))| k1 == k2 && v1 == v2 )
+        self.len() == other.len()
+            && self.iter()
+                .zip(other.iter())
+                .all(|((k1,v1), (k2,v2))| k1 == k2 && v1 == v2 )
     }
 }
 
