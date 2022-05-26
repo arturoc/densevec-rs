@@ -29,7 +29,7 @@ use std::iter::{Enumerate, FromIterator};
 use std::ops::{Index, IndexMut};
 use std::marker::PhantomData;
 
-pub trait Key: Clone + PartialEq{
+pub trait Key: Copy + PartialEq{
     fn to_usize(self) -> usize;
     fn from_usize(k: usize) -> Self;
 }
@@ -235,10 +235,11 @@ impl<K: Key, T> KeyedDenseVec<K,T>{
     }
 
     pub fn entry(&mut self, guid: K) -> Entry<K,T>{
-        if guid.clone().to_usize() >= self.sparse.len() {
-            Entry::Vacant(VacantEntry{storage: self, guid: guid.clone()})
+        let u_guid = guid.to_usize();
+        if u_guid >= self.sparse.len() {
+            Entry::Vacant(VacantEntry{storage: self, guid})
         }else{
-            let idx = unsafe{ *self.sparse.get_unchecked(guid.clone().to_usize()) };
+            let idx = unsafe{ *self.sparse.get_unchecked(u_guid) };
             if idx == usize::MAX {
                 Entry::Vacant(VacantEntry{storage: self, guid})
             }else{
@@ -398,14 +399,14 @@ impl<K: Key, T> KeyedDenseVec<K,T>{
 
     pub fn insert_key_gen(&mut self, value: T) -> K {
         let key = K::from_usize(self.sparse.len());
-        let ret = self.insert(key.clone(), value);
+        let ret = self.insert(key, value);
         debug_assert!(ret.is_none());
         key
     }
 
     pub fn insert_fast_index_key_gen(&mut self, value: T) -> (K, FastIndex) {
         let key = K::from_usize(self.sparse.len());
-        let (ret, idx) = self.insert_fast_index(key.clone(), value);
+        let (ret, idx) = self.insert_fast_index(key, value);
         debug_assert!(ret.is_none());
         (key, idx)
     }
@@ -612,11 +613,11 @@ impl<'a, K: Key, T:'a> OccupiedEntry<'a, K, T> {
     }
 
     pub fn key(&self) -> K{
-        self.guid.clone()
+        self.guid
     }
 
     pub fn remove_entry(self) -> (K, T) {
-        (self.guid.clone(), self.storage.remove(self.guid).unwrap())
+        (self.guid, self.storage.remove(self.guid).unwrap())
     }
 
     pub fn into_mut(self) -> &'a mut T{
@@ -624,7 +625,7 @@ impl<'a, K: Key, T:'a> OccupiedEntry<'a, K, T> {
     }
 
     pub fn remove(&mut self) -> T {
-        self.storage.remove(self.guid.clone()).unwrap()
+        self.storage.remove(self.guid).unwrap()
     }
 }
 
@@ -636,12 +637,12 @@ pub struct VacantEntry<'a, K: 'a, T: 'a>{
 
 impl<'a, K: Key, T:'a> VacantEntry<'a, K, T> {
     pub fn insert(&mut self, t: T) -> &mut T{
-        self.storage.insert(self.guid.clone(), t);
-        unsafe{ self.storage.get_unchecked_mut(self.guid.clone()) }
+        self.storage.insert(self.guid, t);
+        unsafe{ self.storage.get_unchecked_mut(self.guid) }
     }
 
     pub fn key(&self) -> K {
-        self.guid.clone()
+        self.guid
     }
 }
 
@@ -655,7 +656,7 @@ impl<'a, K: Key, T: 'a> Entry<'a, K, T>{
         match self{
             Entry::Occupied(occupied) => occupied.into_mut(),
             Entry::Vacant(VacantEntry{storage, guid}) => {
-                storage.insert(guid.clone(), default);
+                storage.insert(guid, default);
                 unsafe{ storage.get_unchecked_mut(guid) }
             }
         }
@@ -667,7 +668,7 @@ impl<'a, K: Key, T: 'a> Entry<'a, K, T>{
         match self{
             Entry::Occupied(occupied) => occupied.into_mut(),
             Entry::Vacant(VacantEntry{storage, guid}) => {
-                storage.insert(guid.clone(), default());
+                storage.insert(guid, default());
                 unsafe{ storage.get_unchecked_mut(guid) }
             }
         }
