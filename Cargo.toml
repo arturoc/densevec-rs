@@ -16,5 +16,4 @@ serde_derive = {version = "1", optional = true}
 
 [features]
 unstable=[]
-parallel=["rayon"]
 serialize=["serde", "serde_derive"]
