@@ -486,6 +486,30 @@ impl<K: Key, T> KeyedDenseVec<K,T>{
         let key = self.packed.get_unchecked(idx);
         K::from_usize(*key)
     }
+
+    pub fn drain(&mut self) -> Drain<K,T> {
+        Drain {
+            drain: self.packed.drain(..).zip(self.storage.drain(..)),
+            sparse: &mut self.sparse,
+            marker: PhantomData
+        }
+    }
+}
+
+pub struct Drain<'a, K, T> {
+    drain: std::iter::Zip<std::vec::Drain<'a, usize>, std::vec::Drain<'a,T>>,
+    sparse: &'a mut Vec<usize>,
+    marker: PhantomData<K>,
+}
+
+impl<'a, K: Key, T> Iterator for Drain<'a, K, T> {
+    type Item = (K, T);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (key, value) = self.drain.next()?;
+        unsafe{ *self.sparse.get_unchecked_mut(key) = usize::MAX };
+        Some((K::from_usize(key), value))
+    }
 }
 
 pub struct Values<'a, T> {
