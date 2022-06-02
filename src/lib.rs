@@ -560,6 +560,93 @@ impl<'a, T> ExactSizeIterator for ValuesMut<'a, T> {
 }
 
 #[cfg(feature="rayon")]
+pub struct ParIter<'a, K: Sync, T> {
+    iter: rayon::iter::Enumerate<rayon::slice::Iter<'a, usize>>,
+    storage: &'a [T],
+    marker_key: PhantomData<K>,
+}
+
+#[cfg(feature="rayon")]
+impl<'a, K, T> ParallelIterator for ParIter<'a, K, T>
+where
+    K: Send + Sync + Key,
+    T: Send + Sync + 'a
+{
+    type Item = (K, &'a T);
+
+    fn drive_unindexed<C>(self, consumer: C) -> C::Result
+    where
+        C: UnindexedConsumer<Self::Item>
+    {
+        let storage = self.storage;
+        self.iter.filter_map(|(guid, id)| if *id == usize::MAX {
+            None
+        }else{
+            Some((K::from_usize(guid), unsafe{ storage.get_unchecked(*id) }))
+        }).drive_unindexed(consumer)
+    }
+
+    fn opt_len(&self) -> Option<usize> {
+        Some(self.storage.len())
+    }
+}
+
+#[cfg(feature="rayon")]
+impl<K: Key + Sync, T: Sync> KeyedDenseVec<K,T>{
+    pub fn par_iter(&self) -> ParIter<K, T>{
+        ParIter {
+            iter: self.sparse.par_iter().enumerate(),
+            storage: &self.storage,
+            marker_key: PhantomData,
+        }
+    }
+}
+
+#[cfg(feature="rayon")]
+pub struct ParIterMut<'a, K: Sync, T> {
+    iter: rayon::iter::Enumerate<rayon::slice::Iter<'a, usize>>,
+    storage: &'a mut [T],
+    marker_key: PhantomData<K>,
+}
+
+#[cfg(feature="rayon")]
+impl<'a, K, T> ParallelIterator for ParIterMut<'a, K, T>
+where
+    K: Send + Sync + Key,
+    T: Send + Sync + 'a
+{
+    type Item = (K, &'a mut T);
+
+    fn drive_unindexed<C>(self, consumer: C) -> C::Result
+    where
+        C: UnindexedConsumer<Self::Item>
+    {
+        let storage = self.storage;
+        self.iter.filter_map(|(guid, id)| if *id == usize::MAX {
+            None
+        }else{
+            let storage = unsafe{ &mut *(storage as *const [T] as *mut [T]) };
+            Some((K::from_usize(guid), unsafe{ storage.get_unchecked_mut(*id) }))
+        }).drive_unindexed(consumer)
+    }
+
+    fn opt_len(&self) -> Option<usize> {
+        Some(self.storage.len())
+    }
+}
+
+#[cfg(feature="rayon")]
+impl<K: Key + Send + Sync, T: Send + Sync> KeyedDenseVec<K,T>{
+    pub fn par_iter_mut(&mut self) -> ParIterMut<K, T>{
+        ParIterMut {
+            iter: self.sparse.par_iter().enumerate(),
+            storage: &mut self.storage,
+            marker_key: PhantomData,
+        }
+    }
+}
+
+#[cfg(feature="rayon")]
 pub struct ParValues<'a, T: Sync>{
     iter: rayon::slice::Iter<'a, T>
 }
@@ -581,19 +668,6 @@ impl<K, T: Sync> KeyedDenseVec<K,T>{
         ParValues {
             iter: self.storage.par_iter()
         }
-    }
-}
-
-#[cfg(feature="rayon")]
-impl<K: Key + Send + Sync, T: Sync> KeyedDenseVec<K,T>{
-    pub fn par_iter(&self) -> impl rayon::iter::ParallelIterator<Item = (K, &T)> + '_{
-        self.sparse.par_iter().enumerate().filter_map(move |(guid, id)| {
-            if *id == usize::MAX {
-                None
-            }else{
-                Some((K::from_usize(guid), unsafe{ self.storage.get_unchecked(*id) }))
-            }
-        })
     }
 }
 
@@ -621,21 +695,6 @@ impl<K, T: Send> KeyedDenseVec<K,T>{
         ParValuesMut {
             iter: self.storage.par_iter_mut()
         }
-    }
-}
-
-#[cfg(feature="rayon")]
-impl<K: Key + Send + Sync, T: Send + Sync> KeyedDenseVec<K,T>{
-    pub fn par_iter_mut(&mut self) -> impl rayon::iter::ParallelIterator<Item = (K, &mut T)> + '_{
-        let storage = &self.storage;
-        self.sparse.par_iter().enumerate().filter_map(move |(guid, id)| {
-            if *id == usize::MAX {
-                None
-            }else{
-                let storage = unsafe{ &mut *(storage as *const Vec<T> as *mut Vec<T>) };
-                Some((K::from_usize(guid), unsafe{ storage.get_unchecked_mut(*id) }))
-            }
-        })
     }
 }
 
