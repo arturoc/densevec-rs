@@ -471,7 +471,9 @@ impl<K: Key, T> KeyedDenseVec<K,T>{
     }
 
     pub fn fast_index_for(&self, guid: K) -> Option<FastIndex> {
-        self.sparse.get(guid.to_usize()).copied()
+        self.sparse.get(guid.to_usize()).and_then(|fast|
+            (fast.to_usize() != usize::MAX).then_some(fast)
+        ).copied()
     }
 
     pub unsafe fn fast_index_unchecked_for(&self, guid: K) -> FastIndex {
